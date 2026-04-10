@@ -5,6 +5,8 @@ Comando de arranque: streamlit run app_web.py --server.port 8501
 """
 import os
 import json
+import hashlib
+import secrets
 import tempfile
 import warnings
 from io import BytesIO
@@ -21,6 +23,10 @@ import db
 import woo_api
 import fifo
 import etiquetas as etiq_mod
+
+# ── Cargar configuración ────────────────────────────────────────────────────────
+_CONFIG_PATH = Path(__file__).parent / "config.json"
+_CONFIG: dict = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) if _CONFIG_PATH.exists() else {}
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
@@ -187,10 +193,75 @@ _DEFAULTS = {
     "woo_cache":          [],
     "log_ventas":         [],
     "dec_rows":           [],
+    "autenticado":        False,
+    "usuario_actual":     "",
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+# ── Autenticación ─────────────────────────────────────────────────────────────
+
+def _verificar_password(password: str, stored: str) -> bool:
+    """Verifica PBKDF2-SHA256. Formato: pbkdf2:sha256:<iter>$<hex_salt>$<hex_hash>"""
+    try:
+        algo_info, salt_hex, hash_hex = stored.split("$")
+        _, hash_name, iterations = algo_info.split(":")
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+        computed = hashlib.pbkdf2_hmac(
+            hash_name, password.encode("utf-8"), salt, int(iterations)
+        )
+        return secrets.compare_digest(computed, expected)
+    except Exception:
+        return False
+
+
+def _pagina_login():
+    st.markdown(
+        """<style>section[data-testid="stSidebar"]{display:none!important;}</style>""",
+        unsafe_allow_html=True,
+    )
+    _, col, _ = st.columns([1, 1.4, 1])
+    with col:
+        _logo_p = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
+        if _logo_p.exists():
+            lc1, lc2, lc3 = st.columns([1, 1, 1])
+            with lc2:
+                st.image(str(_logo_p), width=80)
+        st.markdown(
+            """
+            <div style="text-align:center;margin:0.75rem 0 1.75rem;">
+                <div style="font-size:1.4rem;font-weight:700;color:#1C2333;">WooAdmin</div>
+                <div style="font-size:0.82rem;color:#9CA3AF;letter-spacing:0.04em;"
+                >DESCUENTOS Y OFERTAS</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        with st.form("_login_form"):
+            _usr = st.text_input("Usuario")
+            _pwd = st.text_input("Contraseña", type="password")
+            _ok  = st.form_submit_button(
+                "Entrar", use_container_width=True, type="primary"
+            )
+        if _ok:
+            _usuarios = _CONFIG.get("usuarios", {})
+            if not _usuarios:
+                st.error(
+                    "Sin usuarios configurados. "
+                    "Ejecuta `setup_usuario.py` en el servidor y reinicia la app."
+                )
+            elif _usr in _usuarios and _verificar_password(_pwd, _usuarios[_usr]["hash"]):
+                st.session_state.autenticado   = True
+                st.session_state.usuario_actual = _usr
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
+
+
+if not st.session_state.autenticado:
+    _pagina_login()
+    st.stop()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -238,6 +309,12 @@ with st.sidebar:
     )
     st.markdown("---")
     st.caption("Gestión de Inventario FIFO\nDescuentos y Ofertas")
+    st.markdown("---")
+    st.caption(f"👤 {st.session_state.usuario_actual}")
+    if st.button("🔒 Cerrar sesión", key="btn_logout", use_container_width=True):
+        st.session_state.autenticado   = False
+        st.session_state.usuario_actual = ""
+        st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
