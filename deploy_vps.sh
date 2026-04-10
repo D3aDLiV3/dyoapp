@@ -7,7 +7,7 @@ set -e
 
 APP_DIR="/opt/wooposadmin"
 REPO_URL="https://github.com/TU_USUARIO/TU_REPO.git"   # <-- Cambia esto
-SERVICE_NAME="wooposadmin"
+APP_NAME="wooposadmin"
 NGINX_CONF="app.descuentosyofertas.net.conf"
 
 echo "======================================================"
@@ -17,7 +17,9 @@ echo "======================================================"
 # 1. Dependencias del sistema
 echo "[1/7] Instalando dependencias del sistema..."
 sudo apt-get update -q
-sudo apt-get install -y python3 python3-venv python3-pip nginx certbot python3-certbot-nginx git
+sudo apt-get install -y python3 python3-venv python3-pip nginx certbot python3-certbot-nginx git nodejs npm
+# Instalar PM2 globalmente
+sudo npm install -g pm2
 
 # 2. Clonar repositorio
 echo "[2/7] Clonando repositorio en $APP_DIR..."
@@ -54,16 +56,21 @@ fi
 echo "[5/7] Inicializando base de datos SQLite..."
 "$APP_DIR/.venv/bin/python" -c "import sys; sys.path.insert(0,'$APP_DIR'); import db; db.init_db()"
 
-# 6. Instalar y arrancar servicio systemd
-echo "[6/7] Configurando servicio systemd..."
-# Ajusta el usuario al usuario actual del sistema
-sed "s/User=ubuntu/User=$USER/g; s|WorkingDirectory=.*|WorkingDirectory=$APP_DIR|g; s|ExecStart=.*|ExecStart=$APP_DIR/.venv/bin/streamlit run $APP_DIR/app_web.py|g" \
-    "$APP_DIR/wooposadmin.service" | sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null
+# 6. Arrancar con PM2
+echo "[6/7] Configurando PM2..."
+sudo mkdir -p /var/log/wooposadmin
 
-sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl restart "$SERVICE_NAME"
-echo "  → Servicio $SERVICE_NAME activo."
+# Ajustar rutas en ecosystem.config.js al directorio real de instalación
+sed -i "s|/opt/wooposadmin|$APP_DIR|g" "$APP_DIR/ecosystem.config.js"
+
+cd "$APP_DIR"
+pm2 delete "$APP_NAME" 2>/dev/null || true
+pm2 start ecosystem.config.js
+pm2 save
+
+# Configurar PM2 para que arranque automáticamente al reiniciar el VPS
+pm2 startup systemd -u "$USER" --hp "$HOME" | tail -1 | sudo bash
+echo "  → PM2 configurado. App '$APP_NAME' activa."
 
 # 7. Instalar configuración Nginx
 echo "[7/7] Configurando Nginx..."
@@ -82,7 +89,9 @@ echo ""
 echo "Próximo paso – Instalar certificado SSL gratuito (HTTPS):"
 echo "  sudo certbot --nginx -d app.descuentosyofertas.net"
 echo ""
-echo "Comandos útiles:"
-echo "  sudo systemctl status $SERVICE_NAME          # Ver estado"
-echo "  sudo journalctl -u $SERVICE_NAME -f          # Ver logs en vivo"
-echo "  sudo systemctl restart $SERVICE_NAME         # Reiniciar app"
+echo "Comandos útiles de PM2:"
+echo "  pm2 status                  # Ver estado de todas las apps"
+echo "  pm2 logs wooposadmin        # Ver logs en vivo"
+echo "  pm2 restart wooposadmin     # Reiniciar app"
+echo "  pm2 stop wooposadmin        # Detener app"
+echo "  pm2 monit                   # Monitor interactivo"
