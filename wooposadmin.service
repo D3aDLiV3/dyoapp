@@ -1,0 +1,22 @@
+[Unit]
+Description=WooPosAdmin — Streamlit Web App
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/wooposadmin
+ExecStart=/opt/wooposadmin/.venv/bin/streamlit run app_web.py
+Restart=on-failure
+RestartSec=5
+
+# Evita que el proceso abra un navegador en el servidor
+Environment="STREAMLIT_SERVER_HEADLESS=true"
+
+# Logs disponibles con: sudo journalctl -u wooposadmin -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
