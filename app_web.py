@@ -376,6 +376,42 @@ def pagina_oc():
     with c2:
         notas = st.text_input("Notas", placeholder="Opcional", key="oc_notas")
 
+    # ── Importar OC desde Excel ───────────────────────────────────────────────
+    with st.expander("📂 Cargar OC desde Excel"):
+        st.caption(
+            "Sube un Excel exportado desde esta pantalla. "
+            "Columnas requeridas: **product_id, nombre, sku, cantidad, precio_compra**"
+        )
+        archivo = st.file_uploader("Selecciona el archivo .xlsx",
+                                   type=["xlsx"], key="oc_upload")
+        if archivo:
+            try:
+                df_imp = pd.read_excel(archivo, dtype={"product_id": int,
+                                                        "cantidad": int,
+                                                        "precio_compra": float})
+                cols_req = {"product_id", "nombre", "sku", "cantidad", "precio_compra"}
+                faltantes = cols_req - set(df_imp.columns.str.lower())
+                if faltantes:
+                    st.error(f"Faltan columnas: {', '.join(faltantes)}")
+                else:
+                    df_imp.columns = df_imp.columns.str.lower()
+                    nuevos = []
+                    for _, row in df_imp.iterrows():
+                        nuevos.append({
+                            "product_id":    int(row["product_id"]),
+                            "nombre":        str(row["nombre"]),
+                            "sku":           str(row["sku"]),
+                            "cantidad":      int(row["cantidad"]),
+                            "precio_compra": float(row["precio_compra"]),
+                        })
+                    if st.button(f"✅ Cargar {len(nuevos)} producto(s) a la OC",
+                                 type="primary", key="btn_oc_import_confirm"):
+                        st.session_state.oc_items = nuevos
+                        st.success(f"{len(nuevos)} productos cargados.")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"Error al leer el archivo: {e}")
+
     st.markdown("---")
     st.markdown("#### Agregar producto")
 
@@ -443,7 +479,7 @@ def pagina_oc():
         total = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
         st.metric("Total OC", f"${total:,.2f}")
 
-        ba, bb = st.columns([1, 1])
+        ba, bb, bc = st.columns([2, 1, 1])
         with ba:
             if st.button("✅ Guardar OC + Actualizar WooCommerce",
                          type="primary", key="btn_oc_guardar"):
@@ -468,6 +504,12 @@ def pagina_oc():
                     except Exception as e:
                         st.error(f"Error: {e}")
         with bb:
+            _df_download(
+                pd.DataFrame(st.session_state.oc_items),
+                "oc_borrador.xlsx",
+                label="📥 Exportar Excel",
+            )
+        with bc:
             if st.button("🗑️ Limpiar lista", key="btn_oc_limpiar"):
                 st.session_state.oc_items.clear()
                 st.session_state.oc_producto_actual = None
