@@ -66,11 +66,18 @@ sed -i "s|/opt/wooposadmin|$APP_DIR|g" "$APP_DIR/ecosystem.config.js"
 cd "$APP_DIR"
 pm2 delete "$APP_NAME" 2>/dev/null || true
 pm2 start ecosystem.config.js
-pm2 save
-
-# Configurar PM2 para que arranque automáticamente al reiniciar el VPS
-pm2 startup systemd -u "$USER" --hp "$HOME" | tail -1 | sudo bash
-echo "  → PM2 configurado. App '$APP_NAME' activa."
+echo "  → App '$APP_NAME' arrancada con PM2."
+echo ""
+echo "  ⚠  IMPORTANTE (PM2 compartido con otras apps):"
+echo "     NO se ejecutó 'pm2 save' automáticamente para no pisar"
+echo "     la lista guardada de tus otras apps."
+echo "     Cuando tengas TODAS tus apps corriendo, ejecuta manualmente:"
+echo "       pm2 save"
+echo ""
+echo "     Si PM2 todavía no está configurado para arrancar al reiniciar:"
+echo "       pm2 startup"
+echo "     → copia y pega el comando sudo que aparezca, y luego:"
+echo "       pm2 save"
 
 # 7. Instalar configuración Nginx
 echo "[7/7] Configurando Nginx..."

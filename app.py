@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import threading
+import os
 
 import db
 import woo_api
@@ -23,9 +24,17 @@ ctk.set_default_color_theme("blue")
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("WooPosAdmin — Gestión de Inventario FIFO")
+        self.title("Descuentos y Ofertas — Inventario FIFO")
         self.geometry("1100x700")
         self.resizable(True, True)
+
+        # Ícono de ventana
+        _ico = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_launcher.ico")
+        if os.path.isfile(_ico):
+            try:
+                self.iconbitmap(_ico)
+            except Exception:
+                pass
 
         db.init_db()
 
@@ -33,8 +42,12 @@ class App(ctk.CTk):
         self.sidebar = ctk.CTkFrame(self, width=180, corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
 
-        ctk.CTkLabel(self.sidebar, text="WooPosAdmin",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(self.sidebar, text="Descuentos\ny Ofertas",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#E42127").pack(pady=12)
+        ctk.CTkLabel(self.sidebar, text="Inventario FIFO",
+                     font=ctk.CTkFont(size=10),
+                     text_color="#F5C400").pack(pady=(0, 8))
 
         self.frames: dict[str, ctk.CTkFrame] = {}
         self._build_nav()
