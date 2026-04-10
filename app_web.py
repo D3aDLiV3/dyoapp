@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import date as dt_date, datetime
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 warnings.filterwarnings("ignore")
@@ -23,20 +24,154 @@ import etiquetas as etiq_mod
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
-    page_title="WooPosAdmin",
-    page_icon="📦",
+    page_title="DYO WooAdmin",
+    page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 st.markdown("""
 <style>
-    section[data-testid="stSidebar"] { background: #1e1e2e; }
-    section[data-testid="stSidebar"] * { color: #cdd6f4 !important; }
-    .stDataFrame thead th { background: #1f538d; color: white; }
-    div[data-testid="metric-container"] {
-        background: #0f3460; border-radius: 8px; padding: 10px;
+    /* ── Sidebar: blanco, angosto, borde derecho sutil ──────────────── */
+    section[data-testid="stSidebar"] {
+        background: #ffffff !important;
+        border-right: 1px solid #E5E7EB !important;
+        min-width: 200px !important;
+        max-width: 200px !important;
+        width: 200px !important;
     }
+    section[data-testid="stSidebar"] > div:first-child {
+        min-width: 200px !important;
+        max-width: 200px !important;
+        width: 200px !important;
+        padding: 1rem 0.75rem !important;
+    }
+
+    /* Todos los textos del sidebar: oscuro */
+    section[data-testid="stSidebar"] * { color: #1C2333 !important; }
+    section[data-testid="stSidebar"] hr {
+        border-color: #E5E7EB !important;
+        margin: 0.6rem 0 !important;
+    }
+    section[data-testid="stSidebar"] .stCaption p,
+    section[data-testid="stSidebar"] small {
+        color: #9CA3AF !important;
+        font-size: 0.7rem !important;
+        line-height: 1.4 !important;
+    }
+
+    /* ── Navegación: ocultar el círculo radio, solo texto ────────────── */
+    section[data-testid="stSidebar"] [data-testid="stRadio"] > div {
+        gap: 2px !important;
+    }
+    /* Ocultar el círculo visual del radio */
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child {
+        width: 0 !important;
+        min-width: 0 !important;
+        overflow: hidden !important;
+        opacity: 0 !important;
+        flex: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label {
+        display: flex !important;
+        align-items: center !important;
+        width: 100% !important;
+        padding: 7px 12px !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        font-size: 0.84rem !important;
+        font-weight: 500 !important;
+        color: #374151 !important;
+        border-left: 3px solid transparent !important;
+        margin: 1px 0 !important;
+        transition: background 0.15s !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
+        background: #F9FAFB !important;
+        border-left-color: #D42B2B !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+        background: #FFF1F1 !important;
+        color: #D42B2B !important;
+        font-weight: 700 !important;
+        border-left-color: #D42B2B !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) p {
+        color: #D42B2B !important;
+    }
+
+    /* ── Fondo general y contenido ──────────────────────────────── */
+    .stApp { background: #F5F6FA !important; }
+    .main .block-container {
+        background: #F5F6FA !important;
+        padding-top: 2rem !important;
+    }
+    .stApp, .stApp * { color: #1C2333; }
+
+    /* ── Títulos ────────────────────────────────────────────────────── */
+    h1 {
+        color: #1C2333 !important;
+        font-weight: 700 !important;
+        font-size: 1.6rem !important;
+        border-bottom: 2px solid #E5E7EB;
+        padding-bottom: 0.5rem;
+        margin-bottom: 1.5rem !important;
+    }
+    h2, h3, h4 { color: #3A5BA0 !important; font-weight: 600 !important; }
+
+    /* ── Métricas ───────────────────────────────────────────────────── */
+    div[data-testid="metric-container"] {
+        background: #ffffff !important;
+        border-radius: 8px !important;
+        padding: 16px 20px !important;
+        border-top: 3px solid #3A5BA0 !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.07) !important;
+    }
+    div[data-testid="metric-container"] label {
+        color: #6B7280 !important;
+        font-size: 0.72rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+    div[data-testid="metric-container"] [data-testid="stMetricValue"] {
+        color: #1C2333 !important;
+        font-size: 1.65rem !important;
+        font-weight: 700 !important;
+    }
+
+    /* ── Tablas ─────────────────────────────────────────────────────── */
+    .stDataFrame thead th {
+        background: #3A5BA0 !important;
+        color: #ffffff !important;
+        font-size: 0.75rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.03em !important;
+    }
+    .stDataFrame { box-shadow: 0 1px 3px rgba(0,0,0,0.07) !important; }
+
+    /* ── Inputs ─────────────────────────────────────────────────────── */
+    .stTextInput input, .stNumberInput input {
+        background: #ffffff !important;
+        border: 1px solid #D1D5DB !important;
+        color: #1C2333 !important;
+    }
+    .stTextInput input:focus, .stNumberInput input:focus {
+        border-color: #3A5BA0 !important;
+        box-shadow: 0 0 0 2px rgba(58,91,160,0.12) !important;
+    }
+
+    /* ── Tabs ──────────────────────────────────────────────────────── */
+    .stTabs [data-baseweb="tab"] { color: #6B7280 !important; font-weight: 500 !important; }
+    .stTabs [aria-selected="true"] {
+        color: #D42B2B !important;
+        border-bottom: 2px solid #D42B2B !important;
+        font-weight: 700 !important;
+    }
+
+    hr { border-color: #E5E7EB !important; opacity: 1 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,20 +214,153 @@ def _cargar_woo_cache() -> list[dict]:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 📦 WooPosAdmin")
+    _logo_path = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
+    c1, c2, c3 = st.columns([1, 3, 1])
+    with c2:
+        st.image(str(_logo_path), use_container_width=True)
+    st.markdown(
+        "<p style='text-align:center; font-size:0.72rem; color:#9CA3AF; "
+        "margin-top:4px; margin-bottom:0; letter-spacing:0.06em; "
+        "text-transform:uppercase;'>WooAdmin</p>",
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
     PAGINA = st.radio(
         "Módulo",
         options=[
+            "🏠 Inicio",
             "📦 Orden de Compra",
             "🛒 Importar Ventas",
             "🏷️ Etiquetas",
-            "📊 Dashboard",
+            "📊 Análisis",
         ],
         label_visibility="collapsed",
     )
     st.markdown("---")
-    st.caption("Gestión de Inventario FIFO")
+    st.caption("Gestión de Inventario FIFO\nDescuentos y Ofertas")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  MÓDULO: INICIO
+# ═════════════════════════════════════════════════════════════════════════════
+def pagina_inicio():
+    from datetime import date as _date
+    st.title("Panel de Control")
+
+    resumen = db.resumen_home()
+
+    # ── KPIs ─────────────────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Valor en Stock",      f"${resumen['valor_stock']:,.0f}")
+    k2.metric("Oórdenes de Compra",  resumen["n_ocs"])
+    k3.metric("Ventas WooCommerce",  resumen["n_ordenes_woo"])
+    k4.metric("Utilidad Neta Total", f"${resumen['utilidad_total']:,.0f}")
+
+    st.markdown("")
+
+    # ── Gráficas ──────────────────────────────────────────────────────────
+    gcol1, gcol2 = st.columns([3, 2])
+
+    with gcol1:
+        st.markdown("#### Utilidad mensual")
+        meses = db.ventas_por_mes()
+        if meses:
+            df_m = pd.DataFrame([dict(r) for r in meses])
+            fig = px.bar(
+                df_m, x="mes", y="utilidad",
+                color_discrete_sequence=["#3A5BA0"],
+                labels={"mes": "", "utilidad": "Utilidad ($)"},
+                height=260,
+            )
+            fig.update_layout(
+                margin=dict(l=0, r=0, t=8, b=0),
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                font=dict(color="#1C2333", size=11),
+                xaxis=dict(tickangle=-35, gridcolor="#F3F4F6"),
+                yaxis=dict(gridcolor="#F3F4F6"),
+            )
+            fig.update_traces(marker_line_width=0)
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.info("Sin ventas procesadas aún. Ve a Importar Ventas.")
+
+    with gcol2:
+        st.markdown("#### Top productos por utilidad")
+        top = db.top_productos_utilidad(8)
+        if top:
+            df_top = pd.DataFrame([dict(r) for r in top])
+            df_top["label"] = df_top["sku"].fillna("").apply(
+                lambda x: (x[:16] + "…") if len(str(x)) > 16 else (x or "Sin SKU")
+            )
+            fig2 = px.bar(
+                df_top, x="utilidad_total", y="label", orientation="h",
+                color_discrete_sequence=["#D42B2B"],
+                labels={"utilidad_total": "Utilidad ($)", "label": ""},
+                height=260,
+            )
+            fig2.update_layout(
+                margin=dict(l=0, r=0, t=8, b=0),
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                font=dict(color="#1C2333", size=11),
+                yaxis=dict(autorange="reversed", gridcolor="#F3F4F6"),
+                xaxis=dict(gridcolor="#F3F4F6"),
+            )
+            fig2.update_traces(marker_line_width=0)
+            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.info("Sin datos de ventas.")
+
+    st.markdown("")
+
+    # ── Últimas OCs + Estado de stock ────────────────────────────────────────
+    bcol1, bcol2 = st.columns([3, 2])
+
+    with bcol1:
+        st.markdown("#### Últimas órdenes de compra")
+        ocs = db.ultimas_ocs(6)
+        if ocs:
+            df_oc = pd.DataFrame([dict(r) for r in ocs])
+            df_oc.columns = ["ID", "Proveedor", "Fecha", "Productos", "Unidades", "Valor OC"]
+            df_oc["Fecha"]    = df_oc["Fecha"].apply(lambda x: str(x)[:10])
+            df_oc["Valor OC"] = df_oc["Valor OC"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(df_oc, use_container_width=True, hide_index=True, height=250)
+        else:
+            st.info("Sin órdenes de compra registradas.")
+
+    with bcol2:
+        st.markdown("#### Estado del inventario")
+        a1, a2 = st.columns(2)
+        a1.metric("Lotes activos",  resumen["n_lotes_activos"])
+        a2.metric("Lotes agotados", resumen["n_lotes_agotados"])
+        st.markdown("")
+        if resumen["n_lotes_agotados"] > 0:
+            st.warning(f"⚠️ **{resumen['n_lotes_agotados']}** lote(s) sin stock")
+        if resumen["n_lotes_bajo"] > 0:
+            st.warning(f"📉 **{resumen['n_lotes_bajo']}** lote(s) con ≤ 3 unidades")
+        if resumen["n_lotes_agotados"] == 0 and resumen["n_lotes_bajo"] == 0:
+            st.success("✅ Stock en niveles normales")
+        st.markdown("")
+        # Mini gráfica donut estado
+        if resumen["n_lotes_activos"] + resumen["n_lotes_agotados"] > 0:
+            df_d = pd.DataFrame({
+                "Estado": ["Activos", "Agotados"],
+                "Lotes":  [resumen["n_lotes_activos"], resumen["n_lotes_agotados"]],
+            })
+            fig3 = px.pie(
+                df_d, names="Estado", values="Lotes", hole=0.55,
+                color="Estado",
+                color_discrete_map={"Activos": "#3A5BA0", "Agotados": "#D42B2B"},
+                height=180,
+            )
+            fig3.update_layout(
+                margin=dict(l=0, r=0, t=0, b=0),
+                paper_bgcolor="#ffffff",
+                showlegend=True,
+                legend=dict(font=dict(size=11)),
+                font=dict(color="#1C2333"),
+            )
+            fig3.update_traces(textinfo="percent", textfont_size=12)
+            st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -337,7 +605,7 @@ def pagina_etiquetas():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  MÓDULO: DASHBOARD
+#  MÓDULO: ANÁLISIS
 # ═════════════════════════════════════════════════════════════════════════════
 
 # ── Helpers de color para DataFrames ─────────────────────────────────────────
@@ -472,8 +740,8 @@ def _dialogo_oc_woo():
             st.rerun()
 
 
-def pagina_dashboard():
-    st.title("📊 Dashboard")
+def pagina_analisis():
+    st.title("📊 Análisis")
 
     (tab_inv, tab_ut, tab_woo,
      tab_surtido, tab_dec) = st.tabs([
@@ -851,11 +1119,13 @@ def pagina_dashboard():
 # ═════════════════════════════════════════════════════════════════════════════
 #  ROUTER
 # ═════════════════════════════════════════════════════════════════════════════
-if PAGINA == "📦 Orden de Compra":
+if PAGINA == "🏠 Inicio":
+    pagina_inicio()
+elif PAGINA == "📦 Orden de Compra":
     pagina_oc()
 elif PAGINA == "🛒 Importar Ventas":
     pagina_ventas()
 elif PAGINA == "🏷️ Etiquetas":
     pagina_etiquetas()
-elif PAGINA == "📊 Dashboard":
-    pagina_dashboard()
+elif PAGINA == "📊 Análisis":
+    pagina_analisis()

@@ -202,3 +202,76 @@ def stock_local_por_producto() -> dict:
     with get_connection() as conn:
         rows = conn.execute(sql).fetchall()
     return {row["product_id"]: int(row["total"]) for row in rows}
+
+
+# ── Funciones de resumen para la página de Inicio ─────────────────────────────────
+
+def resumen_home() -> dict:
+    with get_connection() as conn:
+        r = {}
+        r["n_ocs"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM ordenes_compra").fetchone()["n"]
+        r["n_ordenes_woo"] = conn.execute(
+            "SELECT COUNT(DISTINCT order_id_woo) AS n FROM ventas_procesadas").fetchone()["n"]
+        r["utilidad_total"] = float(conn.execute(
+            "SELECT COALESCE(SUM(utilidad_neta),0) AS t FROM ventas_procesadas").fetchone()["t"])
+        r["valor_stock"] = float(conn.execute(
+            "SELECT COALESCE(SUM(cantidad_actual*precio_compra_unitario),0) AS t "
+            "FROM lotes_inventario").fetchone()["t"])
+        r["n_lotes_activos"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual > 0").fetchone()["n"]
+        r["n_lotes_agotados"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual = 0").fetchone()["n"]
+        r["n_lotes_bajo"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual > 0 AND cantidad_actual <= 3").fetchone()["n"]
+    return r
+
+
+def ventas_por_mes() -> list:
+    sql = """
+        SELECT
+            strftime('%Y-%m', fecha_venta) AS mes,
+            ROUND(SUM(utilidad_neta), 2)   AS utilidad,
+            SUM(cantidad_vendida)           AS unidades
+        FROM ventas_procesadas
+        GROUP BY mes
+        ORDER BY mes
+    """
+    with get_connection() as conn:
+        return conn.execute(sql).fetchall()
+
+
+def top_productos_utilidad(limit: int = 8) -> list:
+    sql = """
+        SELECT
+            vp.product_id,
+            MAX(li.sku)                     AS sku,
+            ROUND(SUM(vp.utilidad_neta), 2) AS utilidad_total,
+            SUM(vp.cantidad_vendida)         AS unidades
+        FROM ventas_procesadas vp
+        LEFT JOIN lotes_inventario li ON li.product_id = vp.product_id
+        GROUP BY vp.product_id
+        ORDER BY utilidad_total DESC
+        LIMIT ?
+    """
+    with get_connection() as conn:
+        return conn.execute(sql, (limit,)).fetchall()
+
+
+def ultimas_ocs(limit: int = 5) -> list:
+    sql = """
+        SELECT
+            oc.id_oc,
+            oc.proveedor,
+            oc.fecha_ingreso,
+            COUNT(li.id_lote)                                                   AS n_productos,
+            COALESCE(SUM(li.cantidad_inicial), 0)                               AS unidades_total,
+            ROUND(COALESCE(SUM(li.cantidad_inicial * li.precio_compra_unitario), 0), 2) AS valor_oc
+        FROM ordenes_compra oc
+        LEFT JOIN lotes_inventario li ON li.id_oc = oc.id_oc
+        GROUP BY oc.id_oc
+        ORDER BY oc.fecha_ingreso DESC
+        LIMIT ?
+    """
+    with get_connection() as conn:
+        return conn.execute(sql, (limit,)).fetchall()
