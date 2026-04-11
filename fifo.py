@@ -73,7 +73,10 @@ def procesar_orden_fifo(order_id_woo: int, product_id: int,
 def importar_ordenes_woo(ordenes: list) -> dict:
     """
     Procesa una lista de órdenes de WooCommerce (ya obtenidas por woo_api).
-    Omite órdenes ya procesadas.
+    - Omite órdenes ya procesadas (todos sus productos cuentan como procesados).
+    - Si un producto en una orden no tiene OC registrada, la orden NO se marca como
+      procesada para que pueda reintentarse una vez se registre la OC.
+    - Productos con product_id=0 (borrados / manuales) se omiten silenciosamente.
 
     Devuelve un dict con listas 'procesadas', 'omitidas' y 'errores'.
     """
@@ -87,8 +90,12 @@ def importar_ordenes_woo(ordenes: list) -> dict:
             resultado["omitidas"].append(order_id)
             continue
 
+        orden_con_error = False
         for item in orden.get("line_items", []):
-            product_id = item.get("product_id")
+            product_id = item.get("product_id") or 0
+            if product_id == 0:
+                # Producto borrado / línea manual — no se puede costear, se omite
+                continue
             cantidad = item.get("quantity", 0)
             precio_venta = float(item.get("price", 0))
 
@@ -102,9 +109,13 @@ def importar_ordenes_woo(ordenes: list) -> dict:
                 )
             except SinLoteDisponibleError as e:
                 resultado["errores"].append({"order_id": order_id, "error": str(e)})
+                orden_con_error = True
             except Exception as e:
                 resultado["errores"].append({"order_id": order_id, "error": str(e)})
+                orden_con_error = True
 
-        resultado["procesadas"].append(order_id)
+        # Solo marcar como procesada si no hubo errores reintentables
+        if not orden_con_error:
+            resultado["procesadas"].append(order_id)
 
     return resultado

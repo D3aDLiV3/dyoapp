@@ -190,6 +190,12 @@ _DEFAULTS = {
     "oc_producto_actual": None,
     "et_items":           [],
     "et_producto_actual": None,
+    "et_oc_items":        None,
+    "et_oc_error":        None,
+    "et_oc_sin":          [],
+    "et_prod_encontrado": None,
+    "et_prod_error":      None,
+    "et_prod_items":      None,
     "woo_cache":          [],
     "log_ventas":         [],
     "dec_rows":           [],
@@ -280,7 +286,21 @@ def _df_download(df: pd.DataFrame, filename: str, label: str = "📤 Descargar E
 
 @st.cache_data(ttl=300, show_spinner="Cargando productos desde WooCommerce…")
 def _cargar_woo_cache() -> list[dict]:
-    return woo_api.get_todos_productos()
+    try:
+        return woo_api.get_todos_productos()
+    except Exception as e:
+        msg = str(e)
+        if "404" in msg:
+            st.error(
+                "**WooCommerce REST API no disponible (404).**\n\n"
+                "Ve a **Panel WP → Ajustes → Enlaces permanentes** y presiona "
+                "**Guardar cambios** (aunque ya esté configurado). "
+                "Esto regenera las reglas del REST API.",
+                icon="🔌",
+            )
+        else:
+            st.error(f"Error al conectar con WooCommerce: {e}", icon="🔌")
+        return []
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -601,6 +621,24 @@ def pagina_oc():
 def pagina_ventas():
     st.title("🛒 Importar Ventas desde WooCommerce")
 
+    with st.expander("ℹ️ ¿Qué hace esta pestaña?", expanded=False):
+        st.markdown("""
+**Esta pestaña aplica el método FIFO al historial de ventas de WooCommerce.**
+
+1. Descarga las órdenes *completadas* desde tu tienda WooCommerce.
+2. Por cada producto vendido, descuenta unidades del lote de compra más antiguo
+   disponible y registra el costo real de venta.
+3. Así puedes ver la **utilidad neta real** por venta en la pestaña *Utilidades*.
+
+**¿Por qué aparecen errores?**
+Los errores significan que ese producto nunca tuvo una **Orden de Compra registrada**
+aquí. Sin OC no hay lote de compra, y sin lote no se puede calcular el costo FIFO.
+Solución: ve a **Órdenes de Compra**, registra la OC para esos productos y vuelve a
+importar — las órdenes con errores se reintentarán automáticamente.
+
+> Las órdenes sin errores se marcan como procesadas y no se duplican.
+        """)
+
     col1, col2 = st.columns([2, 3])
     with col1:
         fecha_in = st.date_input("Desde fecha (vacío = todo el historial)",
@@ -617,110 +655,264 @@ def pagina_ventas():
                 log.append(("success", f"Procesadas: {len(resultado['procesadas'])}"))
                 log.append(("info",
                              f"Omitidas (ya procesadas): {len(resultado['omitidas'])}"))
-                if resultado["errores"]:
+                n_err = len(resultado["errores"])
+                if n_err:
+                    # Ordenar errores por tipo para mostrar resumen primero
+                    sin_lote = [e for e in resultado["errores"]
+                                if "no hay lotes" in e["error"]]
+                    sin_stock = [e for e in resultado["errores"]
+                                 if "insuficiente" in e["error"]]
+                    otros = [e for e in resultado["errores"]
+                             if e not in sin_lote and e not in sin_stock]
+
                     log.append(("warning",
-                                 f"Errores ({len(resultado['errores'])}) — ver detalles:"))
-                    for e in resultado["errores"]:
+                                f"⚠️ {n_err} producto(s) no pudieron costearse "
+                                f"(sin OC registrada). Esas órdenes quedan pendientes "
+                                f"para reintento."))
+                    if sin_lote:
+                        prods_sin_oc = sorted({e["error"].split("Producto ")[1].split(":")[0]
+                                               for e in sin_lote})
                         log.append(("warning",
-                                     f"  Orden #{e['order_id']}: {e['error']}"))
+                                    f"Sin OC → Product IDs: {', '.join(prods_sin_oc)}"))
+                    for e in sin_stock + otros:
+                        log.append(("warning",
+                                    f"  Orden #{e['order_id']}: {e['error']}"))
             except Exception as e:
                 log.append(("error", str(e)))
         st.session_state.log_ventas = log
 
     if st.session_state.log_ventas:
         st.markdown("#### Resultado")
+        errores_detalle = []
         for nivel, msg in st.session_state.log_ventas:
             if nivel == "success":
                 st.success(msg)
             elif nivel == "warning":
-                st.warning(msg)
+                if "Sin OC → Product IDs:" in msg:
+                    errores_detalle.append(msg)
+                elif "producto(s) no pudieron" in msg:
+                    st.warning(msg)
+                else:
+                    errores_detalle.append(msg)
             elif nivel == "error":
                 st.error(msg)
             else:
                 st.info(msg)
+        if errores_detalle:
+            with st.expander(f"📋 Ver detalle de errores ({len(errores_detalle)} líneas)"):
+                for d in errores_detalle:
+                    st.text(d.strip())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  MÓDULO: ETIQUETAS
 # ═════════════════════════════════════════════════════════════════════════════
+def _et_consultar_woo(ids: list, meta_key: str) -> tuple[dict, list]:
+    """Consulta WooCommerce y devuelve (woo_map, ids_no_encontrados)."""
+    prods = woo_api.obtener_productos_por_ids([i for i in ids if i != 0])
+    woo_map = {}
+    for p in prods:
+        pid = int(p["id"])
+        bc = ""
+        for m in p.get("meta_data", []):
+            if m.get("key") == meta_key:
+                bc = str(m.get("value", ""))
+                break
+        if not bc:
+            bc = p.get("sku", "") or str(pid)
+        woo_map[pid] = {
+            "nombre": p.get("name", f"Producto {pid}"),
+            "precio": float(p.get("price", 0) or 0),
+            "barcode": bc,
+            "sku": p.get("sku", ""),
+        }
+    not_found = [i for i in ids if i != 0 and i not in woo_map]
+    return woo_map, not_found
+
+
+def _et_preview_y_descarga(items: list, key_prefix: str, filename: str):
+    """Muestra vista previa y botón de descarga."""
+    sin_bc = st.session_state.get(f"{key_prefix}_sin", [])
+    if sin_bc:
+        st.warning(f"⚠️ {len(sin_bc)} producto(s) no encontrados en WooCommerce: "
+                   + ", ".join(str(x) for x in sin_bc))
+
+    total_et = sum(i["cantidad"] for i in items)
+    st.markdown(f"#### Vista previa — **{total_et}** etiquetas")
+    df_prev = pd.DataFrame([{
+        "SKU":              it["sku"] or "—",
+        "Título (≤48)": etiq_mod.titulo_corto(it["nombre"]),
+        "Precio":           it["precio"],
+        "Barcode":          it["barcode"],
+        "Cantidad":         it["cantidad"],
+    } for it in items])
+    st.dataframe(df_prev, use_container_width=True, hide_index=True)
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp_path = tmp.name
+        etiq_mod.exportar_etiquetas_oc(items, tmp_path)
+        with open(tmp_path, "rb") as f:
+            xlsx_bytes = f.read()
+        os.unlink(tmp_path)
+        st.download_button(
+            label=f"📥 Descargar {filename}",
+            data=xlsx_bytes,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            key=f"dl_{key_prefix}",
+        )
+    except Exception as e:
+        st.error(f"Error al generar Excel: {e}")
+
+
 def pagina_etiquetas():
-    st.title("🏷️ Generador de Etiquetas (Excel)")
+    st.title("🏷️ Generador de Etiquetas")
 
     cfg_path = Path(__file__).parent / "config.json"
     with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
     meta_key = cfg.get("yith_barcode_meta_key", "_ywbc_barcode_value")
 
-    c1, c2 = st.columns([2.5, 1])
-    with c1:
-        sku_et = st.text_input("SKU / Barcode", key="et_sku")
-    with c2:
-        cant_et = st.number_input("Cantidad etiquetas", min_value=1,
-                                  value=1, step=1, key="et_cant")
-
-    if st.session_state.et_producto_actual:
-        p = st.session_state.et_producto_actual
-        st.info(f"✔ **{p['nombre']}**  Barcode: `{p['barcode']}`")
-
-    be1, be2 = st.columns([1, 1])
-    with be1:
-        if st.button("🔍 Buscar", key="btn_et_buscar"):
-            with st.spinner("Buscando…"):
-                try:
-                    prod = (woo_api.buscar_producto_por_sku(sku_et.strip()) or
-                            woo_api.buscar_producto_por_barcode(sku_et.strip()))
-                    if prod:
-                        bc = woo_api.get_barcode_de_producto(prod, meta_key)
-                        st.session_state.et_producto_actual = {
-                            "nombre":  prod.get("name", ""),
-                            "sku":     prod.get("sku", sku_et),
-                            "precio":  float(prod.get("price", 0)),
-                            "barcode": bc or sku_et,
-                        }
-                        st.rerun()
-                    else:
-                        st.warning("Producto no encontrado.")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-    with be2:
-        if st.button("➕ Agregar", key="btn_et_agregar", type="primary"):
-            if not st.session_state.et_producto_actual:
-                st.warning("Busca un producto primero.")
-            else:
-                p = st.session_state.et_producto_actual
-                st.session_state.et_items.append({**p, "cantidad": int(cant_et)})
-                st.session_state.et_producto_actual = None
-                st.rerun()
-
+    modo = st.radio("Modo", ["📦 Por Orden de Compra", "🔍 Por Producto"],
+                    horizontal=True, key="et_modo")
     st.markdown("---")
-    if st.session_state.et_items:
-        st.markdown("#### Productos para etiquetar")
-        df_et = pd.DataFrame(st.session_state.et_items)
-        st.dataframe(df_et, use_container_width=True, hide_index=True)
 
-        # Generar Excel con ruta temporal
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-                tmp_path = tmp.name
-            etiq_mod.exportar_etiquetas(st.session_state.et_items, tmp_path)
-            with open(tmp_path, "rb") as f:
-                xlsx_bytes = f.read()
-            os.unlink(tmp_path)
-            st.download_button(
-                label="📤 Descargar Excel de Etiquetas",
-                data=xlsx_bytes,
-                file_name="etiquetas.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-            )
-        except Exception as e:
-            st.error(f"Error al generar Excel: {e}")
+    # ═══════════════════════════════════════════════════════════════════════
+    # MODO 1: Por OC
+    # ═══════════════════════════════════════════════════════════════════════
+    if modo == "📦 Por Orden de Compra":
+        ocs = db.listar_ordenes_compra()
+        if not ocs:
+            st.info("No hay Órdenes de Compra registradas.")
+            return
 
-        if st.button("🗑️ Limpiar lista", key="btn_et_limpiar"):
-            st.session_state.et_items.clear()
-            st.rerun()
+        oc_opciones = {
+            f"OC #{oc['id_oc']} — {oc['proveedor']} "
+            f"({str(oc['fecha_ingreso'])[:10]})": int(oc["id_oc"])
+            for oc in ocs
+        }
+        oc_sel_label = st.selectbox("Selecciona Orden de Compra",
+                                    list(oc_opciones.keys()), key="et_oc_sel")
+        id_oc = oc_opciones[oc_sel_label]
+
+        if st.button("🔄 Generar etiquetas", type="primary", key="btn_et_oc"):
+            st.session_state["et_oc_items"] = None
+            st.session_state["et_oc_error"] = None
+            lotes = db.listar_lotes_por_oc(id_oc)
+            if not lotes:
+                st.session_state["et_oc_error"] = "Esta OC no tiene lotes registrados."
+            else:
+                ids = [int(r["product_id"]) for r in lotes]
+                with st.spinner("Consultando WooCommerce…"):
+                    try:
+                        woo_map, not_found = _et_consultar_woo(ids, meta_key)
+                        items = []
+                        for r in lotes:
+                            pid  = int(r["product_id"])
+                            sku  = r["sku"] or ""
+                            cant = int(r["cantidad_inicial"])
+                            if pid == 0:
+                                continue
+                            if pid in woo_map:
+                                d = woo_map[pid]
+                                items.append({
+                                    "product_id": pid,
+                                    "nombre":  d["nombre"],
+                                    "precio":  d["precio"],
+                                    "barcode": d["barcode"],
+                                    "sku":     d["sku"] or sku,
+                                    "cantidad": cant,
+                                })
+                            else:
+                                not_found.append(f"ID {pid} (SKU: {sku})")
+                        st.session_state["et_oc_items"] = items
+                        st.session_state["et_oc_sin"]   = not_found
+                    except Exception as e:
+                        st.session_state["et_oc_error"] = str(e)
+
+        if st.session_state.get("et_oc_error"):
+            st.error(st.session_state["et_oc_error"])
+        items = st.session_state.get("et_oc_items")
+        if items:
+            _et_preview_y_descarga(items, "et_oc", f"etiquetas_OC{id_oc}.xlsx")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # MODO 2: Por Producto
+    # ═══════════════════════════════════════════════════════════════════════
     else:
-        st.info("Sin ítems. Busca y agrega productos.")
+        st.caption("Busca un producto por SKU o nombre y genera etiquetas para "
+                   "la cantidad que necesites.")
+
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            busq = st.text_input("SKU / Nombre / Barcode", key="et_prod_busq")
+        with c2:
+            cant_prod = st.number_input("Cantidad de etiquetas", min_value=1,
+                                        value=1, step=1, key="et_prod_cant")
+
+        col_b1, col_b2 = st.columns([1, 1])
+        with col_b1:
+            if st.button("🔍 Buscar producto", key="btn_et_prod_buscar"):
+                st.session_state["et_prod_encontrado"] = None
+                st.session_state["et_prod_error"]     = None
+                with st.spinner("Buscando en WooCommerce…"):
+                    try:
+                        prod = (woo_api.buscar_producto_por_sku(busq.strip()) or
+                                woo_api.buscar_producto_por_barcode(busq.strip()))
+                        if not prod:
+                            # Buscar por nombre en caché
+                            for p in _cargar_woo_cache():
+                                if busq.lower() in (p.get("name") or "").lower():
+                                    prod = p
+                                    break
+                        if prod:
+                            pid = int(prod["id"])
+                            bc = ""
+                            for m in prod.get("meta_data", []):
+                                if m.get("key") == meta_key:
+                                    bc = str(m.get("value", ""))
+                                    break
+                            if not bc:
+                                bc = prod.get("sku", "") or str(pid)
+                            st.session_state["et_prod_encontrado"] = {
+                                "product_id": pid,
+                                "nombre":  prod.get("name", ""),
+                                "precio":  float(prod.get("price", 0) or 0),
+                                "barcode": bc,
+                                "sku":     prod.get("sku", ""),
+                            }
+                        else:
+                            st.session_state["et_prod_error"] = "Producto no encontrado."
+                    except Exception as e:
+                        st.session_state["et_prod_error"] = str(e)
+
+        if st.session_state.get("et_prod_error"):
+            st.warning(st.session_state["et_prod_error"])
+
+        prod_enc = st.session_state.get("et_prod_encontrado")
+        if prod_enc:
+            st.success(f"✔ **{prod_enc['nombre']}** — "
+                       f"SKU: `{prod_enc['sku'] or '—'}` | "
+                       f"Barcode: `{prod_enc['barcode']}` | "
+                       f"Precio: ${prod_enc['precio']:,.0f}")
+
+        with col_b2:
+            if st.button("➕ Generar etiquetas", type="primary", key="btn_et_prod_gen"):
+                if not prod_enc:
+                    st.warning("Busca un producto primero.")
+                else:
+                    items_p = [{
+                        **prod_enc,
+                        "cantidad": int(cant_prod),
+                    }]
+                    st.session_state["et_prod_items"] = items_p
+
+        items_p = st.session_state.get("et_prod_items")
+        if items_p:
+            fname = f"etiquetas_{items_p[0]['sku'] or items_p[0]['product_id']}.xlsx"
+            _et_preview_y_descarga(items_p, "et_prod", fname)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -862,9 +1054,10 @@ def _dialogo_oc_woo():
 def pagina_analisis():
     st.title("📊 Análisis")
 
-    (tab_inv, tab_ut, tab_woo,
+    (tab_inv, tab_prod, tab_ut, tab_woo,
      tab_surtido, tab_dec) = st.tabs([
-        "📦 Inventario Actual",
+        "📦 Inventario por Lotes",
+        "📋 Por Producto",
         "📊 Utilidades",
         "🌐 Stock WooCommerce",
         "🔄 Surtido",
@@ -888,13 +1081,131 @@ def pagina_analisis():
             ])
             df_inv.columns = ["Lote", "OC", "Proveedor", "Fecha OC",
                                "Product ID", "SKU", "Ini.", "Actual",
-                               "P. Compra", "Valor Stock"]
-            valor_total = df_inv["Valor Stock"].sum()
-            st.metric("Valor total en stock", f"${valor_total:,.2f}")
+                               "P. Compra", "Valor Compra"]
+
+            # ── Enriquecer con precio de venta desde WooCommerce ──────────────
+            precio_venta_map: dict[int, float] = {}
+            try:
+                productos_woo = _cargar_woo_cache()
+                precio_venta_map = {
+                    int(p["id"]): float(p.get("price", 0) or 0)
+                    for p in productos_woo
+                }
+            except Exception:
+                pass
+
+            df_inv["P. Venta"] = (
+                df_inv["Product ID"].map(precio_venta_map).fillna(0.0)
+            )
+            df_inv["Valor Venta"] = df_inv["Actual"] * df_inv["P. Venta"]
+
+            # ── Resúmenes (ocultables) ────────────────────────────────────────
+            valor_compra = df_inv["Valor Compra"].sum()
+            valor_venta  = df_inv["Valor Venta"].sum()
+            margen_pond  = ((valor_venta - valor_compra) / valor_venta * 100
+                            if valor_venta > 0 else 0.0)
+            unidades_tot = int(df_inv["Actual"].sum())
+
+            with st.expander("📊 Resumen de inventario", expanded=True):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Unidades totales",        f"{unidades_tot:,}")
+                c2.metric("Valor a precio compra",   f"${valor_compra:,.2f}")
+                c3.metric("Valor a precio venta",
+                           f"${valor_venta:,.2f}" if valor_venta > 0 else "Sin precios WOO")
+                c4.metric("Margen ponderado",
+                           f"{margen_pond:.1f}%" if valor_venta > 0 else "—",
+                           help="(Valor venta − Valor compra) / Valor venta")
+
             st.dataframe(df_inv, use_container_width=True, hide_index=True, height=600)
             _df_download(df_inv, "inventario_lotes.xlsx")
         else:
             st.info("Sin lotes registrados. Crea una Orden de Compra primero.")
+
+    # ── Tab: Por Producto ─────────────────────────────────────────────────────
+    with tab_prod:
+        if st.button("🔄 Cargar vista por Producto", key="btn_prod"):
+            st.cache_data.clear()
+
+        filas_p = [dict(r) for r in db.resumen_por_producto()]
+        if not filas_p:
+            st.info("Sin lotes registrados. Crea una Orden de Compra primero.")
+        else:
+            # Enriquecer con nombre y precio de venta actual desde WooCommerce
+            nombre_map:  dict[int, str]   = {}
+            pventa_map:  dict[int, float] = {}
+            try:
+                for p in _cargar_woo_cache():
+                    pid = int(p["id"])
+                    nombre_map[pid] = p.get("name", "") or ""
+                    pventa_map[pid] = float(p.get("price", 0) or 0)
+            except Exception:
+                pass
+
+            rows = []
+            for r in filas_p:
+                pid = int(r["product_id"] or 0)
+                if pid == 0:
+                    continue   # lotes sin producto WOO válido
+                stock      = int(r["stock_actual"] or 0)
+                p_compra   = float(r["precio_compra_pond"] or 0)
+                p_venta    = pventa_map.get(pid, float(r["ultimo_precio_venta"] or 0))
+                ganancia_u = round(p_venta - p_compra, 2)
+                margen_pct = round(ganancia_u / p_venta * 100, 1) if p_venta > 0 else 0.0
+                rows.append({
+                    "Product ID":        pid,
+                    "SKU":               r["sku"] or "—",
+                    "Nombre":            nombre_map.get(pid, "—"),
+                    "Stock":             stock,
+                    "P. Compra (pond.)": p_compra,
+                    "Últ. Compra":       str(r["ultima_compra_fecha"] or "")[:10],
+                    "P. Venta (WOO)":    p_venta,
+                    "Últ. Venta":        str(r["ultima_venta_fecha"] or "")[:10],
+                    "Ganancia/u":        ganancia_u,
+                    "Margen %":          margen_pct,
+                    "Valor Stock €":     round(stock * p_compra, 2),
+                    "Valor Venta €":     round(stock * p_venta, 2),
+                })
+
+            df_p = pd.DataFrame(rows)
+
+            # ── Resumen agregado ──────────────────────────────────────────────
+            tot_stock   = int(df_p["Stock"].sum())
+            tot_compra  = df_p["Valor Stock €"].sum()
+            tot_venta   = df_p["Valor Venta €"].sum()
+            margen_gral = round((tot_venta - tot_compra) / tot_venta * 100, 1) if tot_venta > 0 else 0.0
+
+            with st.expander("📊 Resumen", expanded=True):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Productos distintos",   len(df_p))
+                c2.metric("Unidades totales",       f"{tot_stock:,}")
+                c3.metric("Valor a costo",          f"${tot_compra:,.0f}")
+                c4.metric("Valor a precio venta",   f"${tot_venta:,.0f}")
+                c5, c6 = st.columns([1, 3])
+                c5.metric("Margen ponderado",
+                           f"{margen_gral:.1f}%",
+                           help="(Valor venta − Valor costo) / Valor venta")
+
+            # Formato de colores: rojo si margen < 0, verde si > 20 %
+            def _color_margen(val):
+                if val < 0:   return "color: #e74c3c"
+                if val >= 20: return "color: #27ae60"
+                return ""
+
+            st.dataframe(
+                df_p.style.map(_color_margen, subset=["Margen %"])
+                    .format({
+                        "P. Compra (pond.)": "${:,.0f}",
+                        "P. Venta (WOO)":    "${:,.0f}",
+                        "Ganancia/u":        "${:,.0f}",
+                        "Margen %":          "{:.1f}%",
+                        "Valor Stock €":     "${:,.0f}",
+                        "Valor Venta €":     "${:,.0f}",
+                    }),
+                use_container_width=True,
+                hide_index=True,
+                height=620,
+            )
+            _df_download(df_p, "inventario_por_producto.xlsx")
 
     # ── Tab: Utilidades ───────────────────────────────────────────────────────
     with tab_ut:

@@ -64,6 +64,18 @@ def listar_lotes_por_producto(product_id: int) -> list:
         return conn.execute(sql, (product_id,)).fetchall()
 
 
+def listar_lotes_por_oc(id_oc: int) -> list:
+    """Devuelve los lotes registrados bajo una OC dada (cantidad_inicial = lo comprado)."""
+    sql = """
+        SELECT product_id, sku, cantidad_inicial
+        FROM lotes_inventario
+        WHERE id_oc = ?
+        ORDER BY id_lote ASC
+    """
+    with get_connection() as conn:
+        return conn.execute(sql, (id_oc,)).fetchall()
+
+
 def listar_todos_lotes() -> list:
     """Devuelve todos los lotes con info de la OC, para el dashboard de inventario."""
     sql = """
@@ -202,6 +214,56 @@ def stock_local_por_producto() -> dict:
     with get_connection() as conn:
         rows = conn.execute(sql).fetchall()
     return {row["product_id"]: int(row["total"]) for row in rows}
+
+
+def resumen_por_producto() -> list:
+    """
+    Vista por producto (no por lote): stock, precio compra ponderado, última
+    compra, última venta FIFO y último precio de venta registrado.
+
+    Columnas devueltas:
+        product_id, sku, stock_actual,
+        precio_compra_pond,   -- promedio ponderado de lotes con stock > 0
+        ultimo_precio_compra, -- precio del lote más reciente
+        ultima_compra_fecha,
+        ultima_venta_fecha,
+        ultimo_precio_venta   -- precio de la última venta registrada en FIFO
+    """
+    sql = """
+        SELECT
+            li.product_id,
+            MAX(li.sku)                                                        AS sku,
+            COALESCE(SUM(li.cantidad_actual), 0)                               AS stock_actual,
+            ROUND(
+                CASE WHEN SUM(li.cantidad_actual) > 0
+                     THEN SUM(li.cantidad_actual * li.precio_compra_unitario)
+                          / SUM(li.cantidad_actual)
+                     ELSE (SELECT li3.precio_compra_unitario
+                           FROM lotes_inventario li3
+                           WHERE li3.product_id = li.product_id
+                           ORDER BY li3.id_lote DESC LIMIT 1)
+                END, 2)                                                        AS precio_compra_pond,
+            (SELECT li2.precio_compra_unitario
+             FROM lotes_inventario li2
+             WHERE li2.product_id = li.product_id
+             ORDER BY li2.id_lote DESC LIMIT 1)                                AS ultimo_precio_compra,
+            (SELECT MAX(oc2.fecha_ingreso)
+             FROM ordenes_compra oc2
+             JOIN lotes_inventario lx ON lx.id_oc = oc2.id_oc
+             WHERE lx.product_id = li.product_id)                              AS ultima_compra_fecha,
+            (SELECT MAX(vp.fecha_venta)
+             FROM ventas_procesadas vp
+             WHERE vp.product_id = li.product_id)                              AS ultima_venta_fecha,
+            (SELECT vp2.precio_venta_unitario
+             FROM ventas_procesadas vp2
+             WHERE vp2.product_id = li.product_id
+             ORDER BY vp2.fecha_venta DESC LIMIT 1)                            AS ultimo_precio_venta
+        FROM lotes_inventario li
+        GROUP BY li.product_id
+        ORDER BY sku ASC
+    """
+    with get_connection() as conn:
+        return conn.execute(sql).fetchall()
 
 
 # ── Funciones de resumen para la página de Inicio ─────────────────────────────────
