@@ -73,25 +73,6 @@ def obtener_producto_por_id(product_id: int) -> dict:
     return resp.json()
 
 
-def obtener_productos_por_ids(ids: list) -> list:
-    """Obtiene múltiples productos en lote usando el parámetro 'include'."""
-    if not ids:
-        return []
-    wcapi = get_wcapi()
-    ids_str = ",".join(str(i) for i in ids)
-    page, resultados = 1, []
-    while True:
-        resp = wcapi.get("products",
-                         params={"include": ids_str, "per_page": 100, "page": page})
-        resp.raise_for_status()
-        datos = resp.json()
-        if not datos:
-            break
-        resultados.extend(datos)
-        page += 1
-    return resultados
-
-
 def actualizar_stock(product_id: int, nuevo_stock: int):
     wcapi = get_wcapi()
     resp = wcapi.put(f"products/{product_id}", data={"stock_quantity": nuevo_stock})

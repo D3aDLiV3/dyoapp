@@ -188,6 +188,7 @@ db.init_db()
 _DEFAULTS = {
     "oc_items":           [],
     "oc_producto_actual": None,
+    "oc_guardando":       False,
     "et_items":           [],
     "et_producto_actual": None,
     "et_oc_items":        None,
@@ -512,61 +513,76 @@ def pagina_oc():
     st.markdown("---")
     st.markdown("#### Agregar producto")
 
-    cols = st.columns([2.5, 1, 1.5])
+    # ── Catálogo WooCommerce (cacheado) ───────────────────────────────────────
+    catalogo = _cargar_woo_cache()
+    if not catalogo:
+        st.warning("No se pudo cargar el catálogo de WooCommerce. "
+                   "Verifica la conexión y recarga la página.")
+        catalogo = []
+
+    # Construir opciones: "SKU — Nombre del producto"
+    # El primer elemento es el placeholder
+    _PLACEHOLDER = "— Selecciona un producto —"
+    opciones_labels = [_PLACEHOLDER] + [
+        f"{p.get('sku', '?')} — {p.get('name', '?')}"
+        for p in catalogo
+    ]
+    # Mapa label → producto
+    _cat_map = {
+        f"{p.get('sku', '?')} — {p.get('name', '?')}": p
+        for p in catalogo
+    }
+
+    sel_label = st.selectbox(
+        "Buscar producto (SKU o nombre)",
+        options=opciones_labels,
+        index=0,
+        key="oc_sel_producto",
+        help="Escribe el SKU o parte del nombre para filtrar",
+    )
+
+    # Cuando el usuario selecciona un producto real, guardarlo
+    if sel_label != _PLACEHOLDER:
+        prod_sel = _cat_map.get(sel_label)
+        if prod_sel:
+            st.session_state.oc_producto_actual = {
+                "id":     prod_sel.get("id"),
+                "nombre": prod_sel.get("name", ""),
+                "sku":    prod_sel.get("sku", ""),
+            }
+    else:
+        # Sólo limpiar si el usuario volvió al placeholder manualmente
+        if st.session_state.oc_producto_actual and not st.session_state.get("_oc_just_added"):
+            pass  # Conservar selección hasta que se agregue o limpie
+
+    cols = st.columns([1, 1.5])
     with cols[0]:
-        sku_input = st.text_input("SKU / Barcode", key="oc_sku",
-                                  placeholder="Escanea o escribe el SKU")
-    with cols[1]:
         cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1,
                                    key="oc_cant")
-    with cols[2]:
+    with cols[1]:
         precio = st.number_input("Precio Compra $", min_value=0.0, value=0.0,
                                  step=0.01, format="%.2f", key="oc_precio")
 
     if st.session_state.oc_producto_actual:
         p = st.session_state.oc_producto_actual
-        st.info(f"✔ **{p['nombre']}** — ID: `{p['id']}`  SKU: `{p['sku']}`")
+        st.info(f"✔ **{p['nombre']}** — WC ID: `{p['id']}`  SKU: `{p['sku']}`")
 
-    bc1, bc2 = st.columns([1, 1])
-    with bc1:
-        if st.button("🔍 Buscar producto", key="btn_oc_buscar"):
-            sk = sku_input.strip()
-            if not sk:
-                st.warning("Ingresa un SKU o barcode.")
-            else:
-                with st.spinner("Buscando en WooCommerce…"):
-                    try:
-                        prod = (woo_api.buscar_producto_por_sku(sk) or
-                                woo_api.buscar_producto_por_barcode(sk))
-                        if prod:
-                            st.session_state.oc_producto_actual = {
-                                "id":     prod.get("id"),
-                                "nombre": prod.get("name", ""),
-                                "sku":    prod.get("sku", sk),
-                            }
-                            st.rerun()
-                        else:
-                            st.warning("❌ Producto no encontrado en WooCommerce.")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-    with bc2:
-        if st.button("➕ Agregar a OC", key="btn_oc_agregar", type="primary"):
-            if not st.session_state.oc_producto_actual:
-                st.warning("Busca un producto primero.")
-            elif precio <= 0:
-                st.warning("Ingresa un precio de compra mayor a 0.")
-            else:
-                p = st.session_state.oc_producto_actual
-                st.session_state.oc_items.append({
-                    "product_id":    p["id"],
-                    "nombre":        p["nombre"],
-                    "sku":           p["sku"],
-                    "cantidad":      int(cantidad),
-                    "precio_compra": float(precio),
-                })
-                st.session_state.oc_producto_actual = None
-                st.rerun()
+    if st.button("➕ Agregar a OC", key="btn_oc_agregar", type="primary"):
+        if not st.session_state.oc_producto_actual:
+            st.warning("Selecciona un producto primero.")
+        elif precio <= 0:
+            st.warning("Ingresa un precio de compra mayor a 0.")
+        else:
+            p = st.session_state.oc_producto_actual
+            st.session_state.oc_items.append({
+                "product_id":    p["id"],
+                "nombre":        p["nombre"],
+                "sku":           p["sku"],
+                "cantidad":      int(cantidad),
+                "precio_compra": float(precio),
+            })
+            st.session_state.oc_producto_actual = None
+            st.rerun()
 
     st.markdown("---")
     if st.session_state.oc_items:
@@ -578,28 +594,37 @@ def pagina_oc():
 
         ba, bb, bc = st.columns([2, 1, 1])
         with ba:
-            if st.button("✅ Guardar OC + Actualizar WooCommerce",
-                         type="primary", key="btn_oc_guardar"):
-                prov = proveedor.strip() or "Sin proveedor"
-                with st.spinner("Guardando y actualizando stock en WooCommerce…"):
-                    try:
-                        id_oc = db.crear_orden_compra(prov, notas)
-                        for item in st.session_state.oc_items:
-                            db.crear_lote(id_oc, item["product_id"],
-                                          item["sku"], item["cantidad"],
-                                          item["precio_compra"])
-                            woo_api.incrementar_stock(item["product_id"],
-                                                      item["cantidad"])
-                        n = len(st.session_state.oc_items)
-                        st.session_state.oc_items.clear()
-                        st.session_state.oc_producto_actual = None
-                        # Invalidar caché de WooCommerce
-                        _cargar_woo_cache.clear()
-                        st.success(f"✅ OC #{id_oc} creada — {n} productos "
-                                   "actualizados en WooCommerce.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+            guardando = st.session_state.get("oc_guardando", False)
+            if guardando:
+                st.warning("⏳ **Guardando OC y actualizando WooCommerce… espera, no cierres ni recargues.**",
+                           icon="⏳")
+            elif st.button("✅ Guardar OC + Actualizar WooCommerce",
+                           type="primary", key="btn_oc_guardar",
+                           disabled=guardando):
+                st.session_state["oc_guardando"] = True
+                st.rerun()
+
+        # Ejecutar el guardado en el siguiente ciclo (cuando oc_guardando=True)
+        if st.session_state.get("oc_guardando"):
+            prov = proveedor.strip() or "Sin proveedor"
+            try:
+                id_oc = db.crear_orden_compra(prov, notas)
+                for item in st.session_state.oc_items:
+                    db.crear_lote(id_oc, item["product_id"],
+                                  item["sku"], item["cantidad"],
+                                  item["precio_compra"])
+                    woo_api.incrementar_stock(item["product_id"],
+                                              item["cantidad"])
+                n = len(st.session_state.oc_items)
+                st.session_state.oc_items.clear()
+                st.session_state.oc_producto_actual = None
+                st.session_state["oc_guardando"] = False
+                _cargar_woo_cache.clear()
+                st.success(f"✅ OC #{id_oc} creada — {n} productos actualizados en WooCommerce.")
+                st.rerun()
+            except Exception as e:
+                st.session_state["oc_guardando"] = False
+                st.error(f"Error: {e}")
         with bb:
             _df_download(
                 pd.DataFrame(st.session_state.oc_items),
@@ -709,17 +734,23 @@ importar — las órdenes con errores se reintentarán automáticamente.
 # ═════════════════════════════════════════════════════════════════════════════
 def _et_consultar_woo(ids: list, meta_key: str) -> tuple[dict, list]:
     """Consulta WooCommerce y devuelve (woo_map, ids_no_encontrados)."""
-    prods = woo_api.obtener_productos_por_ids([i for i in ids if i != 0])
+    # obtener_productos_por_ids devuelve {product_id: product_dict}
+    prods_dict = woo_api.obtener_productos_por_ids([i for i in ids if i != 0])
     woo_map = {}
-    for p in prods:
-        pid = int(p["id"])
-        bc = ""
+    for pid_raw, p in prods_dict.items():
+        pid = int(pid_raw)
+        # Prefer _ywbc_barcode_display_value (already padded + check digit, matches YITH PrintCode)
+        # Fall back to the configured meta_key if display value not present
+        bc_display = ""
+        bc_raw = ""
         for m in p.get("meta_data", []):
-            if m.get("key") == meta_key:
-                bc = str(m.get("value", ""))
-                break
-        if not bc:
-            bc = p.get("sku", "") or str(pid)
+            k = str(m.get("key", ""))
+            v = str(m.get("value", "") or "").strip()
+            if k == "_ywbc_barcode_display_value" and v:
+                bc_display = v
+            elif k == meta_key and v:
+                bc_raw = v
+        bc = bc_display or bc_raw or p.get("sku", "") or str(pid)
         woo_map[pid] = {
             "nombre": p.get("name", f"Producto {pid}"),
             "precio": float(p.get("price", 0) or 0),
@@ -746,7 +777,14 @@ def _et_preview_y_descarga(items: list, key_prefix: str, filename: str):
         "Barcode":          it["barcode"],
         "Cantidad":         it["cantidad"],
     } for it in items])
-    st.dataframe(df_prev, use_container_width=True, hide_index=True)
+    # Force Barcode as string dtype so pandas / Streamlit don't strip leading zeros
+    df_prev["Barcode"] = df_prev["Barcode"].astype(str)
+    st.dataframe(
+        df_prev,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Barcode": st.column_config.TextColumn("Barcode", width="large")},
+    )
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -1267,29 +1305,68 @@ def pagina_analisis():
                     "Estado":         p.get("stock_status", ""),
                     "Gestiona Stock": "Sí" if manage_stock else "No",
                 })
-            df_woo = pd.DataFrame(filas_woo)
+            df_woo = pd.DataFrame(filas_woo) if filas_woo else pd.DataFrame()
             n_agotados = sum(1 for r in filas_woo if r["Stock"] == "0"
                              or r["Estado"] == "outofstock")
             col_w3, col_w4 = st.columns(2)
             col_w3.metric("Productos mostrados", len(df_woo))
             col_w4.metric("Agotados", n_agotados)
 
-            # Color en columna Stock
-            styled = (df_woo.style
-                      .map(_color_stock, subset=["Stock"])
-                      .format({"Precio": "${:.2f}"}))
-            st.dataframe(styled, use_container_width=True, hide_index=True,
-                         height=620)
-            _df_download(df_woo, "stock_woocommerce.xlsx")
+            if df_woo.empty:
+                st.info("Ningún producto coincide con el filtro.")
+            else:
+                # Color en columna Stock
+                styled = (df_woo.style
+                          .map(_color_stock, subset=["Stock"])
+                          .format({"Precio": "${:.2f}"}))
+                st.dataframe(styled, use_container_width=True, hide_index=True,
+                             height=620)
+                _df_download(df_woo, "stock_woocommerce.xlsx")
 
-            # ── Detectar stock huérfano y ofrecer crear OC ───────────────
+            # ── Detectar discrepancias de stock ──────────────────────────
             stock_local = db.stock_local_por_producto()
+
+            # WC > local → stock sin OC registrada (huérfano)
             huerfanos = [
                 p for p in productos_woo
                 if p.get("manage_stock")
                 and (p.get("stock_quantity") or 0) > 0
                 and (p.get("stock_quantity") or 0) > stock_local.get(p.get("id"), 0)
             ]
+
+            # WC < local → stock reducido manualmente en WooCommerce
+            reducidos = [
+                p for p in productos_woo
+                if p.get("manage_stock")
+                and stock_local.get(p.get("id"), 0) > (p.get("stock_quantity") or 0)
+            ]
+
+            if reducidos:
+                with st.container(border=True):
+                    st.error(
+                        f"🚨 **{len(reducidos)} producto(s) con stock modificado manualmente en WooCommerce** — "
+                        "el stock en WooCommerce es **menor** que el registrado en las OCs. "
+                        "Esto indica que alguien editó el stock directamente en el panel de WooCommerce.",
+                        icon="🚨",
+                    )
+                    rows_red = []
+                    for p in reducidos:
+                        pid = p.get("id")
+                        wc_stock = p.get("stock_quantity") or 0
+                        local_stock = stock_local.get(pid, 0)
+                        rows_red.append({
+                            "ID": pid,
+                            "Nombre": (p.get("name") or "")[:50],
+                            "SKU": p.get("sku") or "—",
+                            "Stock WooCommerce": wc_stock,
+                            "Stock en OCs (sistema)": local_stock,
+                            "Diferencia": wc_stock - local_stock,
+                        })
+                    st.dataframe(
+                        pd.DataFrame(rows_red),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             if huerfanos:
                 diff_total = sum(
@@ -1307,8 +1384,9 @@ def pagina_analisis():
                     st.session_state["oc_woo_huerfanos"] = huerfanos
                     st.session_state["oc_woo_stock_local"] = stock_local
                     _dialogo_oc_woo()
-            else:
-                st.success("✅ Todo el stock de WooCommerce tiene OC asignada.",
+
+            if not huerfanos and not reducidos:
+                st.success("✅ Todo el stock de WooCommerce coincide con las OCs registradas.",
                            icon="✅")
         else:
             st.info("Pulsa 'Recargar desde WooCommerce' para cargar los productos.")

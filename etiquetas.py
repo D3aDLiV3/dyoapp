@@ -144,5 +144,24 @@ def exportar_etiquetas_oc(items: list[dict], ruta_salida: str) -> str:
         raise ValueError("No hay ítems para exportar.")
 
     df = pd.DataFrame(filas, columns=["Titulo", "Precio", "Barcode"])
+    # Ensure Barcode stays as text (openpyxl writes str columns as shared-string cells,
+    # preventing Excel from auto-converting "000000038508" to the number 38508)
+    df["Barcode"] = df["Barcode"].astype(str)
+
     df.to_excel(ruta_salida, index=False)
+
+    # Post-process with openpyxl: mark Barcode column as Number Format "@" (Text)
+    # so Excel never strips leading zeros even after the user edits the file
+    from openpyxl import load_workbook
+    wb = load_workbook(ruta_salida)
+    ws = wb.active
+    headers = [cell.value for cell in ws[1]]
+    if "Barcode" in headers:
+        bc_col = headers.index("Barcode") + 1
+        for row in ws.iter_rows(min_row=2, min_col=bc_col, max_col=bc_col):
+            for cell in row:
+                cell.number_format = "@"
+                cell.value = str(cell.value) if cell.value is not None else ""
+    wb.save(ruta_salida)
+
     return ruta_salida
