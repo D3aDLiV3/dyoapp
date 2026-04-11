@@ -13,6 +13,7 @@ module.exports = {
         STREAMLIT_SERVER_HEADLESS: "true",
         STREAMLIT_SERVER_PORT: "8501",
         STREAMLIT_SERVER_ADDRESS: "127.0.0.1",
+        TZ: "America/Bogota",
       },
       error_file: "/var/log/wooposadmin/error.log",
       out_file: "/var/log/wooposadmin/out.log",

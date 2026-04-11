@@ -1506,7 +1506,8 @@ def pagina_analisis():
                 for r in datos:
                     pid               = r["product_id"]
                     total_vendidos    = r["total_vendidos"] or 0
-                    primera_str       = (r["primera_venta"] or "")[:10]
+                    _pv = r["primera_venta"]
+                    primera_str       = (str(_pv)[:10] if _pv else "")
                     precio_venta_prom = float(r["precio_venta_prom"] or 0)
                     costo_unit_prom   = float(r["costo_unit_prom"] or 0)
                     utilidad_total    = float(r["utilidad_total"] or 0)
