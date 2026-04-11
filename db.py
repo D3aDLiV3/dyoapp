@@ -1,45 +1,167 @@
 """
-db.py — Capa de acceso a la base de datos SQLite local.
+db.py — Capa de acceso a datos.
+
+Soporta SQLite (local/offline) y PostgreSQL (cloud centralizado).
+Si config.json contiene 'database_url', usa PostgreSQL; si no, SQLite local.
 """
+import json
+import re
 import sqlite3
-import os
+from contextlib import contextmanager
+from pathlib import Path
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "wooposadmin.db")
-SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema_local.sql")
+try:
+    import psycopg2
+    import psycopg2.extras
+    _HAS_PSYCOPG2 = True
+except ImportError:
+    _HAS_PSYCOPG2 = False
+
+_CONFIG_PATH = Path(__file__).parent / "config.json"
+_cfg: dict = (
+    json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    if _CONFIG_PATH.exists() else {}
+)
+_DATABASE_URL: str = _cfg.get("database_url", "")
+_USE_PG: bool = bool(_DATABASE_URL) and _HAS_PSYCOPG2
+
+DB_PATH     = Path(__file__).parent / "wooposadmin.db"
+SCHEMA_PATH = Path(__file__).parent / "schema_local.sql"
+
+# ── Schema PostgreSQL ─────────────────────────────────────────────────────────
+_SCHEMA_PG = [
+    """CREATE TABLE IF NOT EXISTS ordenes_compra (
+        id_oc         SERIAL PRIMARY KEY,
+        proveedor     TEXT,
+        fecha_ingreso TIMESTAMP DEFAULT NOW(),
+        notas         TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS lotes_inventario (
+        id_lote                SERIAL PRIMARY KEY,
+        id_oc                  INTEGER REFERENCES ordenes_compra(id_oc),
+        product_id             INTEGER,
+        sku                    TEXT,
+        cantidad_inicial       INTEGER,
+        cantidad_actual        INTEGER,
+        precio_compra_unitario DECIMAL(10,2)
+    )""",
+    """CREATE TABLE IF NOT EXISTS ventas_procesadas (
+        id_venta_local        SERIAL PRIMARY KEY,
+        order_id_woo          INTEGER,
+        product_id            INTEGER,
+        cantidad_vendida      INTEGER,
+        precio_venta_unitario DECIMAL(10,2),
+        costo_total_lote      DECIMAL(10,2),
+        utilidad_neta         DECIMAL(10,2),
+        fecha_venta           TIMESTAMP
+    )""",
+]
+
+# ── Helpers internos ──────────────────────────────────────────────────────────
+
+@contextmanager
+def _conn():
+    """Context manager que devuelve conexión SQLite o PostgreSQL."""
+    if _USE_PG:
+        c = psycopg2.connect(_DATABASE_URL)
+        try:
+            yield c
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
+    else:
+        c = sqlite3.connect(str(DB_PATH))
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield c
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def _q(sql: str) -> str:
+    """Traduce SQL SQLite → PostgreSQL (placeholders y funciones de fecha)."""
+    if not _USE_PG:
+        return sql
+    # strftime('%Y-%m', campo) → TO_CHAR(campo, 'YYYY-MM')
+    sql = re.sub(
+        r"strftime\('%Y-%m',\s*([^)]+)\)",
+        r"TO_CHAR(\1, 'YYYY-MM')",
+        sql,
+    )
+    sql = sql.replace("?", "%s")
+    return sql
 
+
+def _rows(conn, sql: str, params=()):
+    """SELECT → lista de filas dict-like."""
+    if _USE_PG:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(_q(sql), params or None)
+            return cur.fetchall()
+    return conn.execute(sql, params).fetchall()
+
+
+def _row(conn, sql: str, params=()):
+    rows = _rows(conn, sql, params)
+    return rows[0] if rows else None
+
+
+def _exec(conn, sql: str, params=()):
+    """Statement sin retorno (UPDATE, DELETE, INSERT sin RETURNING)."""
+    if _USE_PG:
+        with conn.cursor() as cur:
+            cur.execute(_q(sql), params or None)
+    else:
+        conn.execute(sql, params)
+
+
+def _insert(conn, sql: str, params, returning: str) -> int:
+    """INSERT que devuelve el ID del nuevo registro."""
+    if _USE_PG:
+        with conn.cursor() as cur:
+            cur.execute(_q(sql) + f" RETURNING {returning}", params)
+            return cur.fetchone()[0]
+    cur = conn.execute(sql, params)
+    return cur.lastrowid
+
+
+# ── Init ──────────────────────────────────────────────────────────────────────
 
 def init_db():
-    """Crea las tablas si no existen, usando schema_local.sql."""
-    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-        schema = f.read()
-    with get_connection() as conn:
-        conn.executescript(schema)
+    """Crea tablas si no existen (SQLite usa schema_local.sql, PG usa DDL inline)."""
+    if _USE_PG:
+        with _conn() as conn:
+            for stmt in _SCHEMA_PG:
+                with conn.cursor() as cur:
+                    cur.execute(stmt)
+    else:
+        schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        with _conn() as conn:
+            conn.executescript(schema)
 
 
-# ── Órdenes de Compra ────────────────────────────────────────────────────────
+# ── Órdenes de Compra ─────────────────────────────────────────────────────────
 
 def crear_orden_compra(proveedor: str, notas: str = "") -> int:
     sql = "INSERT INTO ordenes_compra (proveedor, notas) VALUES (?, ?)"
-    with get_connection() as conn:
-        cur = conn.execute(sql, (proveedor, notas))
-        return cur.lastrowid
+    with _conn() as conn:
+        return _insert(conn, sql, (proveedor, notas), "id_oc")
 
 
 def listar_ordenes_compra() -> list:
-    with get_connection() as conn:
-        return conn.execute(
-            "SELECT * FROM ordenes_compra ORDER BY fecha_ingreso DESC"
-        ).fetchall()
+    with _conn() as conn:
+        return _rows(conn, "SELECT * FROM ordenes_compra ORDER BY fecha_ingreso DESC")
 
 
-# ── Lotes de Inventario (FIFO) ───────────────────────────────────────────────
+# ── Lotes de Inventario (FIFO) ────────────────────────────────────────────────
 
 def crear_lote(id_oc: int, product_id: int, sku: str,
                cantidad: int, precio_compra: float) -> int:
@@ -48,36 +170,32 @@ def crear_lote(id_oc: int, product_id: int, sku: str,
             (id_oc, product_id, sku, cantidad_inicial, cantidad_actual, precio_compra_unitario)
         VALUES (?, ?, ?, ?, ?, ?)
     """
-    with get_connection() as conn:
-        cur = conn.execute(sql, (id_oc, product_id, sku, cantidad, cantidad, precio_compra))
-        return cur.lastrowid
+    with _conn() as conn:
+        return _insert(conn, sql, (id_oc, product_id, sku, cantidad, cantidad, precio_compra), "id_lote")
 
 
 def listar_lotes_por_producto(product_id: int) -> list:
-    """Devuelve lotes ordenados por FIFO (más antiguos primero) con stock > 0."""
     sql = """
         SELECT * FROM lotes_inventario
         WHERE product_id = ? AND cantidad_actual > 0
         ORDER BY id_lote ASC
     """
-    with get_connection() as conn:
-        return conn.execute(sql, (product_id,)).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql, (product_id,))
 
 
 def listar_lotes_por_oc(id_oc: int) -> list:
-    """Devuelve los lotes registrados bajo una OC dada (cantidad_inicial = lo comprado)."""
     sql = """
         SELECT product_id, sku, cantidad_inicial
         FROM lotes_inventario
         WHERE id_oc = ?
         ORDER BY id_lote ASC
     """
-    with get_connection() as conn:
-        return conn.execute(sql, (id_oc,)).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql, (id_oc,))
 
 
 def listar_todos_lotes() -> list:
-    """Devuelve todos los lotes con info de la OC, para el dashboard de inventario."""
     sql = """
         SELECT
             li.id_lote,
@@ -94,17 +212,17 @@ def listar_todos_lotes() -> list:
         LEFT JOIN ordenes_compra oc ON oc.id_oc = li.id_oc
         ORDER BY li.id_lote DESC
     """
-    with get_connection() as conn:
-        return conn.execute(sql).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql)
 
 
 def descontar_lote(id_lote: int, cantidad: int):
     sql = "UPDATE lotes_inventario SET cantidad_actual = cantidad_actual - ? WHERE id_lote = ?"
-    with get_connection() as conn:
-        conn.execute(sql, (cantidad, id_lote))
+    with _conn() as conn:
+        _exec(conn, sql, (cantidad, id_lote))
 
 
-# ── Ventas Procesadas ────────────────────────────────────────────────────────
+# ── Ventas Procesadas ─────────────────────────────────────────────────────────
 
 def registrar_venta(order_id_woo: int, product_id: int, cantidad_vendida: int,
                     precio_venta: float, costo_total: float,
@@ -115,18 +233,15 @@ def registrar_venta(order_id_woo: int, product_id: int, cantidad_vendida: int,
              costo_total_lote, utilidad_neta, fecha_venta)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """
-    with get_connection() as conn:
-        conn.execute(sql, (order_id_woo, product_id, cantidad_vendida,
-                           precio_venta, costo_total, utilidad_neta, fecha_venta))
+    with _conn() as conn:
+        _exec(conn, sql, (order_id_woo, product_id, cantidad_vendida,
+                          precio_venta, costo_total, utilidad_neta, fecha_venta))
 
 
 def orden_ya_procesada(order_id_woo: int) -> bool:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM ventas_procesadas WHERE order_id_woo = ? LIMIT 1",
-            (order_id_woo,)
-        ).fetchone()
-        return row is not None
+    sql = "SELECT 1 FROM ventas_procesadas WHERE order_id_woo = ? LIMIT 1"
+    with _conn() as conn:
+        return _row(conn, sql, (order_id_woo,)) is not None
 
 
 def listar_ventas() -> list:
@@ -143,27 +258,17 @@ def listar_ventas() -> list:
         FROM ventas_procesadas vp
         LEFT JOIN lotes_inventario li
             ON li.product_id = vp.product_id
-        GROUP BY vp.id_venta_local
+        GROUP BY vp.id_venta_local, vp.fecha_venta, vp.order_id_woo, vp.product_id,
+                 li.sku, vp.cantidad_vendida, vp.precio_venta_unitario,
+                 vp.costo_total_lote, vp.utilidad_neta
         ORDER BY vp.fecha_venta DESC
     """
-    with get_connection() as conn:
-        return conn.execute(sql).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql)
 
 
 def analisis_por_producto(desde_fecha: str = None, hasta_fecha: str = None) -> list:
-    """
-    Agrega ventas_procesadas por producto para el análisis de rentabilidad.
-
-    Retorna una fila por product_id con:
-    - total_vendidos, primera_venta, ultima_venta
-    - precio_venta_prom (promedio ponderado por unidades)
-    - costo_unit_prom   (costo FIFO promedio ponderado)
-    - utilidad_total    (suma de utilidad_neta)
-    - stock_local       (unidades actuales en lotes_inventario)
-    - sku               (del último lote registrado)
-    """
-    condiciones = []
-    params = []
+    condiciones, params = [], []
     if desde_fecha:
         condiciones.append("vp.fecha_venta >= ?")
         params.append(desde_fecha)
@@ -197,38 +302,22 @@ def analisis_por_producto(desde_fecha: str = None, hasta_fecha: str = None) -> l
         GROUP BY vp.product_id
         ORDER BY utilidad_total DESC
     """
-    with get_connection() as conn:
-        return conn.execute(sql, params).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql, tuple(params))
 
 
 def stock_local_por_producto() -> dict:
-    """
-    Devuelve {product_id: cantidad_actual_total} sumando todos los lotes activos.
-    Usado para detectar stock huérfano (WooCommerce > local FIFO).
-    """
     sql = """
         SELECT product_id, COALESCE(SUM(cantidad_actual), 0) AS total
         FROM lotes_inventario
         GROUP BY product_id
     """
-    with get_connection() as conn:
-        rows = conn.execute(sql).fetchall()
+    with _conn() as conn:
+        rows = _rows(conn, sql)
     return {row["product_id"]: int(row["total"]) for row in rows}
 
 
 def resumen_por_producto() -> list:
-    """
-    Vista por producto (no por lote): stock, precio compra ponderado, última
-    compra, última venta FIFO y último precio de venta registrado.
-
-    Columnas devueltas:
-        product_id, sku, stock_actual,
-        precio_compra_pond,   -- promedio ponderado de lotes con stock > 0
-        ultimo_precio_compra, -- precio del lote más reciente
-        ultima_compra_fecha,
-        ultima_venta_fecha,
-        ultimo_precio_venta   -- precio de la última venta registrada en FIFO
-    """
     sql = """
         SELECT
             li.product_id,
@@ -262,30 +351,28 @@ def resumen_por_producto() -> list:
         GROUP BY li.product_id
         ORDER BY sku ASC
     """
-    with get_connection() as conn:
-        return conn.execute(sql).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql)
 
 
-# ── Funciones de resumen para la página de Inicio ─────────────────────────────────
+# ── Resumen home ──────────────────────────────────────────────────────────────
 
 def resumen_home() -> dict:
-    with get_connection() as conn:
-        r = {}
-        r["n_ocs"] = conn.execute(
-            "SELECT COUNT(*) AS n FROM ordenes_compra").fetchone()["n"]
-        r["n_ordenes_woo"] = conn.execute(
-            "SELECT COUNT(DISTINCT order_id_woo) AS n FROM ventas_procesadas").fetchone()["n"]
-        r["utilidad_total"] = float(conn.execute(
-            "SELECT COALESCE(SUM(utilidad_neta),0) AS t FROM ventas_procesadas").fetchone()["t"])
-        r["valor_stock"] = float(conn.execute(
-            "SELECT COALESCE(SUM(cantidad_actual*precio_compra_unitario),0) AS t "
-            "FROM lotes_inventario").fetchone()["t"])
-        r["n_lotes_activos"] = conn.execute(
-            "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual > 0").fetchone()["n"]
-        r["n_lotes_agotados"] = conn.execute(
-            "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual = 0").fetchone()["n"]
-        r["n_lotes_bajo"] = conn.execute(
-            "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual > 0 AND cantidad_actual <= 3").fetchone()["n"]
+    queries = {
+        "n_ocs":           "SELECT COUNT(*) AS n FROM ordenes_compra",
+        "n_ordenes_woo":   "SELECT COUNT(DISTINCT order_id_woo) AS n FROM ventas_procesadas",
+        "utilidad_total":  "SELECT COALESCE(SUM(utilidad_neta),0) AS t FROM ventas_procesadas",
+        "valor_stock":     "SELECT COALESCE(SUM(cantidad_actual*precio_compra_unitario),0) AS t FROM lotes_inventario",
+        "n_lotes_activos": "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual > 0",
+        "n_lotes_agotados":"SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual = 0",
+        "n_lotes_bajo":    "SELECT COUNT(*) AS n FROM lotes_inventario WHERE cantidad_actual > 0 AND cantidad_actual <= 3",
+    }
+    r = {}
+    with _conn() as conn:
+        for key, sql in queries.items():
+            row = _row(conn, sql)
+            val = row["n"] if "n" in dict(row) else row["t"]
+            r[key] = float(val) if key in ("utilidad_total", "valor_stock") else int(val)
     return r
 
 
@@ -299,8 +386,8 @@ def ventas_por_mes() -> list:
         GROUP BY mes
         ORDER BY mes
     """
-    with get_connection() as conn:
-        return conn.execute(sql).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql)
 
 
 def top_productos_utilidad(limit: int = 8) -> list:
@@ -316,8 +403,8 @@ def top_productos_utilidad(limit: int = 8) -> list:
         ORDER BY utilidad_total DESC
         LIMIT ?
     """
-    with get_connection() as conn:
-        return conn.execute(sql, (limit,)).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql, (limit,))
 
 
 def ultimas_ocs(limit: int = 5) -> list:
@@ -331,9 +418,9 @@ def ultimas_ocs(limit: int = 5) -> list:
             ROUND(COALESCE(SUM(li.cantidad_inicial * li.precio_compra_unitario), 0), 2) AS valor_oc
         FROM ordenes_compra oc
         LEFT JOIN lotes_inventario li ON li.id_oc = oc.id_oc
-        GROUP BY oc.id_oc
+        GROUP BY oc.id_oc, oc.proveedor, oc.fecha_ingreso
         ORDER BY oc.fecha_ingreso DESC
         LIMIT ?
     """
-    with get_connection() as conn:
-        return conn.execute(sql, (limit,)).fetchall()
+    with _conn() as conn:
+        return _rows(conn, sql, (limit,))
