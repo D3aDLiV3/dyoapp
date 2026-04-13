@@ -5,17 +5,19 @@ Comando de arranque: streamlit run app_web.py --server.port 8501
 """
 import os
 import json
+import hmac as _hmac
 import hashlib
 import secrets
 import tempfile
 import warnings
 from io import BytesIO
 from pathlib import Path
-from datetime import date as dt_date, datetime
+from datetime import date as dt_date, datetime, timedelta
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import extra_streamlit_components as stx
 
 warnings.filterwarnings("ignore")
 
@@ -27,6 +29,43 @@ import etiquetas as etiq_mod
 # ── Cargar configuración ────────────────────────────────────────────────────────
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 _CONFIG: dict = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) if _CONFIG_PATH.exists() else {}
+
+# ── Cookie de sesión ──────────────────────────────────────────────────────────
+_COOKIE_NAME = "dyo_session"
+_COOKIE_DAYS = 30
+
+# Auto-genera cookie_secret la primera vez y lo guarda en config.json
+if "cookie_secret" not in _CONFIG or not _CONFIG["cookie_secret"]:
+    _CONFIG["cookie_secret"] = secrets.token_hex(32)
+    _CONFIG_PATH.write_text(
+        json.dumps(_CONFIG, indent=4, ensure_ascii=False), encoding="utf-8"
+    )
+
+def _crear_token_cookie(username: str) -> str:
+    expiry = int(datetime.now().timestamp()) + _COOKIE_DAYS * 86400
+    payload = f"{username}|{expiry}"
+    sig = _hmac.new(
+        _CONFIG["cookie_secret"].encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}|{sig}"
+
+def _validar_token_cookie(token: str) -> "str | None":
+    try:
+        parts = token.split("|")
+        if len(parts) != 3:
+            return None
+        username, expiry_str, sig = parts
+        if int(expiry_str) < int(datetime.now().timestamp()):
+            return None
+        payload = f"{username}|{expiry_str}"
+        expected = _hmac.new(
+            _CONFIG["cookie_secret"].encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        if not _hmac.compare_digest(sig, expected):
+            return None
+        return username if username in _CONFIG.get("usuarios", {}) else None
+    except Exception:
+        return None
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
@@ -259,12 +298,31 @@ def _pagina_login():
                     "Ejecuta `setup_usuario.py` en el servidor y reinicia la app."
                 )
             elif _usr in _usuarios and _verificar_password(_pwd, _usuarios[_usr]["hash"]):
-                st.session_state.autenticado   = True
+                st.session_state.autenticado    = True
                 st.session_state.usuario_actual = _usr
+                _cookie_mgr.set(
+                    _COOKIE_NAME,
+                    _crear_token_cookie(_usr),
+                    expires_at=datetime.now() + timedelta(days=_COOKIE_DAYS),
+                    key="_set_login_cookie",
+                )
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
 
+
+# ── Cookie Manager (singleton por sesión) ────────────────────────────────────
+_cookie_mgr = stx.CookieManager()
+
+# Restaurar sesión desde cookie si el WebSocket reconectó
+if not st.session_state.autenticado:
+    _tok_cookie = _cookie_mgr.get(_COOKIE_NAME)
+    if _tok_cookie:
+        _restored = _validar_token_cookie(_tok_cookie)
+        if _restored:
+            st.session_state.autenticado    = True
+            st.session_state.usuario_actual = _restored
+            st.rerun()
 
 if not st.session_state.autenticado:
     _pagina_login()
@@ -325,6 +383,7 @@ with st.sidebar:
             "🛒 Importar Ventas",
             "🏷️ Etiquetas",
             "📊 Análisis",
+            "💰 Finanzas",
         ],
         label_visibility="collapsed",
     )
@@ -333,6 +392,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"👤 {st.session_state.usuario_actual}")
     if st.button("🔒 Cerrar sesión", key="btn_logout", use_container_width=True):
+        _cookie_mgr.delete(_COOKIE_NAME, key="_del_session_cookie")
         st.session_state.autenticado   = False
         st.session_state.usuario_actual = ""
         st.rerun()
@@ -348,11 +408,12 @@ def pagina_inicio():
     resumen = db.resumen_home()
 
     # ── KPIs ─────────────────────────────────────────────────────────────
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Valor en Stock",      f"${resumen['valor_stock']:,.0f}")
-    k2.metric("Oórdenes de Compra",  resumen["n_ocs"])
-    k3.metric("Ventas WooCommerce",  resumen["n_ordenes_woo"])
-    k4.metric("Utilidad Neta Total", f"${resumen['utilidad_total']:,.0f}")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Valor en Stock",          f"${resumen['valor_stock']:,.0f}")
+    k2.metric("Órdenes de Compra",       resumen["n_ocs"])
+    k3.metric("Ventas WooCommerce",      resumen["n_ordenes_woo"])
+    k4.metric("Utilidad Neta Total",     f"${resumen['utilidad_total']:,.0f}")
+    k5.metric("Gastos este mes",         f"${resumen['gastos_mes']:,.0f}")
 
     st.markdown("")
 
@@ -1626,6 +1687,222 @@ def pagina_analisis():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  MÓDULO: FINANZAS
+# ═════════════════════════════════════════════════════════════════════════════
+def pagina_finanzas():
+    from datetime import date as _date, datetime as _dt
+    import calendar
+
+    st.title("💰 Finanzas")
+
+    tab_gastos, tab_patrimonio = st.tabs(["📋 Gastos Operativos", "🏦 Patrimonio"])
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  TAB 1: GASTOS OPERATIVOS
+    # ═══════════════════════════════════════════════════════════════════
+    with tab_gastos:
+        hoy = _date.today()
+
+        # ── KPIs del mes actual ─────────────────────────────────────────
+        gastos_mes  = db.total_gastos_mes(hoy.year, hoy.month)
+        gastos_anio = sum(
+            float(r["total_gastos"]) for r in db.gastos_por_mes()
+            if str(r["mes"]).startswith(str(hoy.year))
+        )
+        cat_mes = db.gastos_por_categoria(
+            desde=f"{hoy.year}-{hoy.month:02d}-01",
+            hasta=f"{hoy.year}-{hoy.month:02d}-{calendar.monthrange(hoy.year, hoy.month)[1]:02d}",
+        )
+        mayor_cat = max(cat_mes, key=lambda r: float(r["total"]), default=None)
+
+        km1, km2, km3 = st.columns(3)
+        km1.metric(f"Gastos {hoy.strftime('%B %Y')}", f"${gastos_mes:,.0f}")
+        km2.metric(f"Gastos {hoy.year}",              f"${gastos_anio:,.0f}")
+        km3.metric("Mayor categoría (mes)",
+                   mayor_cat["categoria"] if mayor_cat else "—",
+                   f"${float(mayor_cat['total']):,.0f}" if mayor_cat else None)
+
+        st.markdown("---")
+
+        # ── Formulario nuevo gasto ──────────────────────────────────────
+        with st.expander("➕ Registrar gasto", expanded=False):
+            with st.form("form_nuevo_gasto", clear_on_submit=True):
+                fc1, fc2 = st.columns(2)
+                cat = fc1.selectbox("Categoría", db.CATEGORIAS_GASTO)
+                fecha_g = fc2.date_input("Fecha", value=hoy)
+                desc = st.text_input("Descripción (opcional)")
+                fc3, fc4 = st.columns([2, 1])
+                monto = fc3.number_input("Monto ($)", min_value=0.0, step=1000.0, format="%.0f")
+                recurrente = fc4.checkbox("Recurrente mensual")
+                if st.form_submit_button("Guardar gasto", type="primary", use_container_width=True):
+                    if monto <= 0:
+                        st.error("El monto debe ser mayor a 0.")
+                    else:
+                        db.registrar_gasto(cat, desc.strip() or None, monto,
+                                           str(fecha_g), recurrente)
+                        st.success(f"Gasto de ${monto:,.0f} registrado.")
+                        st.rerun()
+
+        # ── Filtros y tabla ─────────────────────────────────────────────
+        st.markdown("#### Historial de gastos")
+        fl1, fl2, fl3 = st.columns([2, 2, 1])
+        f_desde = fl1.date_input("Desde", value=_date(hoy.year, hoy.month, 1),
+                                 key="g_desde")
+        f_hasta = fl2.date_input("Hasta", value=hoy, key="g_hasta")
+
+        gastos = db.listar_gastos(desde=str(f_desde), hasta=str(f_hasta))
+
+        if gastos:
+            df_g = pd.DataFrame([dict(r) for r in gastos])
+            df_g["fecha"]      = df_g["fecha"].apply(lambda x: str(x)[:10])
+            df_g["recurrente"] = df_g["recurrente"].apply(lambda x: "✅" if x else "")
+            df_g["monto"]      = df_g["monto"].apply(lambda x: f"${float(x):,.0f}")
+            df_g = df_g.rename(columns={
+                "id_gasto": "ID", "categoria": "Categoría",
+                "descripcion": "Descripción", "monto": "Monto",
+                "fecha": "Fecha", "recurrente": "Recurrente",
+            })
+            st.dataframe(df_g[["ID","Fecha","Categoría","Descripción","Monto","Recurrente"]],
+                         use_container_width=True, hide_index=True)
+
+            total_periodo = sum(
+                float(str(r["monto"]).replace("$", "").replace(",", ""))
+                for r in gastos
+            )
+            st.markdown(f"**Total del período: ${total_periodo:,.0f}**")
+
+            # Eliminar gasto individual
+            with st.expander("🗑️ Eliminar gasto"):
+                ids_disp = [r["id_gasto"] for r in gastos]
+                del_id = st.selectbox("ID del gasto a eliminar", ids_disp)
+                if st.button("Eliminar", type="secondary"):
+                    db.eliminar_gasto(del_id)
+                    st.success(f"Gasto #{del_id} eliminado.")
+                    st.rerun()
+        else:
+            st.info("Sin gastos en el período seleccionado.")
+
+        st.markdown("")
+
+        # ── Gráficas ────────────────────────────────────────────────────
+        gcol1, gcol2 = st.columns([3, 2])
+
+        with gcol1:
+            st.markdown("#### Gastos por mes")
+            meses_g = db.gastos_por_mes()
+            if meses_g:
+                df_mg = pd.DataFrame([dict(r) for r in meses_g])
+                fig_gm = px.bar(
+                    df_mg, x="mes", y="total_gastos",
+                    color_discrete_sequence=["#D42B2B"],
+                    labels={"mes": "", "total_gastos": "Gastos ($)"},
+                    height=240,
+                )
+                fig_gm.update_layout(
+                    margin=dict(l=0, r=0, t=8, b=0),
+                    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                    font=dict(color="#1C2333", size=11),
+                    xaxis=dict(tickangle=-35, gridcolor="#F3F4F6"),
+                    yaxis=dict(gridcolor="#F3F4F6"),
+                )
+                fig_gm.update_traces(marker_line_width=0)
+                st.plotly_chart(fig_gm, use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.info("Sin gastos registrados aún.")
+
+        with gcol2:
+            st.markdown("#### Por categoría (período)")
+            cats = db.gastos_por_categoria(desde=str(f_desde), hasta=str(f_hasta))
+            if cats:
+                df_cat = pd.DataFrame([dict(r) for r in cats])
+                fig_cat = px.pie(
+                    df_cat, names="categoria", values="total", hole=0.45,
+                    color_discrete_sequence=[
+                        "#D42B2B","#3A5BA0","#F59E0B","#10B981","#8B5CF6","#6B7280",
+                    ],
+                    height=240,
+                )
+                fig_cat.update_layout(
+                    margin=dict(l=0, r=0, t=8, b=0),
+                    paper_bgcolor="#ffffff",
+                    legend=dict(font=dict(size=10)),
+                )
+                fig_cat.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.info("Sin datos para el período.")
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  TAB 2: PATRIMONIO
+    # ═══════════════════════════════════════════════════════════════════
+    with tab_patrimonio:
+        resumen = db.resumen_home()
+        patri_rows = db.patrimonio_inventario()
+
+        valor_inv      = resumen["valor_stock"]
+        utilidad_acum  = resumen["utilidad_total"]
+        gastos_acum    = sum(float(r["total_gastos"]) for r in db.gastos_por_mes())
+        patrimonio_net = valor_inv + utilidad_acum - gastos_acum
+
+        pk1, pk2, pk3, pk4 = st.columns(4)
+        pk1.metric("Inventario (costo)",  f"${valor_inv:,.0f}")
+        pk2.metric("Utilidad bruta acum.", f"${utilidad_acum:,.0f}")
+        pk3.metric("Gastos acumulados",    f"${gastos_acum:,.0f}")
+        pk4.metric("Patrimonio neto",      f"${patrimonio_net:,.0f}")
+
+        st.markdown("")
+
+        pcol1, pcol2 = st.columns([3, 2])
+
+        with pcol1:
+            st.markdown("#### Inventario por producto")
+            if patri_rows:
+                df_p = pd.DataFrame([dict(r) for r in patri_rows])
+                df_p["costo_prom"]       = df_p["costo_prom"].apply(lambda x: f"${float(x):,.0f}")
+                df_p["valor_inventario"] = df_p["valor_inventario"].apply(lambda x: f"${float(x):,.0f}")
+                df_p = df_p.rename(columns={
+                    "product_id": "ID", "sku": "SKU",
+                    "stock_actual": "Stock", "costo_prom": "Costo prom",
+                    "valor_inventario": "Valor en inventario",
+                })
+                st.dataframe(df_p[["SKU","Stock","Costo prom","Valor en inventario"]],
+                             use_container_width=True, hide_index=True, height=320)
+            else:
+                st.info("Sin inventario registrado.")
+
+        with pcol2:
+            st.markdown("#### Composición")
+            comp_data = {
+                "Componente": ["Inventario", "Utilidad bruta", "Gastos"],
+                "Valor":      [max(valor_inv, 0), max(utilidad_acum, 0), max(gastos_acum, 0)],
+            }
+            if any(v > 0 for v in comp_data["Valor"]):
+                df_comp = pd.DataFrame(comp_data)
+                fig_comp = px.bar(
+                    df_comp, x="Componente", y="Valor",
+                    color="Componente",
+                    color_discrete_map={
+                        "Inventario":    "#3A5BA0",
+                        "Utilidad bruta": "#10B981",
+                        "Gastos":        "#D42B2B",
+                    },
+                    height=280,
+                    labels={"Valor": "$"},
+                )
+                fig_comp.update_layout(
+                    margin=dict(l=0, r=0, t=8, b=0),
+                    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                    font=dict(color="#1C2333", size=11),
+                    showlegend=False,
+                    yaxis=dict(gridcolor="#F3F4F6"),
+                )
+                fig_comp.update_traces(marker_line_width=0)
+                st.plotly_chart(fig_comp, use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.info("Sin datos suficientes.")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  ROUTER
 # ═════════════════════════════════════════════════════════════════════════════
 if PAGINA == "🏠 Inicio":
@@ -1638,3 +1915,5 @@ elif PAGINA == "🏷️ Etiquetas":
     pagina_etiquetas()
 elif PAGINA == "📊 Análisis":
     pagina_analisis()
+elif PAGINA == "💰 Finanzas":
+    pagina_finanzas()

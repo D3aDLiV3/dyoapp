@@ -55,6 +55,15 @@ _SCHEMA_PG = [
         utilidad_neta         DECIMAL(10,2),
         fecha_venta           TIMESTAMP
     )""",
+    """CREATE TABLE IF NOT EXISTS gastos_operativos (
+        id_gasto       SERIAL PRIMARY KEY,
+        categoria      TEXT    NOT NULL,
+        descripcion    TEXT,
+        monto          DECIMAL(12,2) NOT NULL,
+        fecha          DATE    NOT NULL,
+        recurrente     SMALLINT NOT NULL DEFAULT 0,
+        fecha_registro TIMESTAMP DEFAULT NOW()
+    )""",
 ]
 
 # ── Helpers internos ──────────────────────────────────────────────────────────
@@ -373,6 +382,10 @@ def resumen_home() -> dict:
             row = _row(conn, sql)
             val = row["n"] if "n" in dict(row) else row["t"]
             r[key] = float(val) if key in ("utilidad_total", "valor_stock") else int(val)
+
+    import datetime as _dt
+    hoy = _dt.date.today()
+    r["gastos_mes"] = total_gastos_mes(hoy.year, hoy.month)
     return r
 
 
@@ -424,3 +437,113 @@ def ultimas_ocs(limit: int = 5) -> list:
     """
     with _conn() as conn:
         return _rows(conn, sql, (limit,))
+
+
+# ── Gastos Operativos ────────────────────────────────────────────────────────
+CATEGORIAS_GASTO = ["Salario", "Arriendo", "Servicios públicos", "Transporte", "Publicidad", "Otro"]
+
+
+def registrar_gasto(categoria: str, descripcion: str, monto: float,
+                    fecha: str, recurrente: bool = False) -> int:
+    sql = """
+        INSERT INTO gastos_operativos (categoria, descripcion, monto, fecha, recurrente)
+        VALUES (?, ?, ?, ?, ?)
+    """
+    with _conn() as conn:
+        return _insert(conn, sql,
+                       (categoria, descripcion, monto, fecha, 1 if recurrente else 0),
+                       "id_gasto")
+
+
+def listar_gastos(desde: str = None, hasta: str = None) -> list:
+    conds, params = [], []
+    if desde:
+        conds.append("fecha >= ?")
+        params.append(desde)
+    if hasta:
+        conds.append("fecha <= ?")
+        params.append(hasta)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    sql = f"""
+        SELECT id_gasto, categoria, descripcion, monto, fecha, recurrente
+        FROM gastos_operativos
+        {where}
+        ORDER BY fecha DESC, id_gasto DESC
+    """
+    with _conn() as conn:
+        return _rows(conn, sql, tuple(params))
+
+
+def eliminar_gasto(id_gasto: int):
+    with _conn() as conn:
+        _exec(conn, "DELETE FROM gastos_operativos WHERE id_gasto = ?", (id_gasto,))
+
+
+def gastos_por_mes() -> list:
+    sql = """
+        SELECT
+            strftime('%Y-%m', fecha) AS mes,
+            ROUND(SUM(monto), 2)     AS total_gastos
+        FROM gastos_operativos
+        GROUP BY mes
+        ORDER BY mes
+    """
+    with _conn() as conn:
+        return _rows(conn, sql)
+
+
+def gastos_por_categoria(desde: str = None, hasta: str = None) -> list:
+    conds, params = [], []
+    if desde:
+        conds.append("fecha >= ?")
+        params.append(desde)
+    if hasta:
+        conds.append("fecha <= ?")
+        params.append(hasta)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    sql = f"""
+        SELECT categoria, ROUND(SUM(monto), 2) AS total
+        FROM gastos_operativos
+        {where}
+        GROUP BY categoria
+        ORDER BY total DESC
+    """
+    with _conn() as conn:
+        return _rows(conn, sql, tuple(params))
+
+
+def total_gastos_mes(anio: int, mes: int) -> float:
+    prefijo = f"{anio:04d}-{mes:02d}"
+    sql = """
+        SELECT COALESCE(SUM(monto), 0) AS total
+        FROM gastos_operativos
+        WHERE strftime('%Y-%m', fecha) = ?
+    """
+    with _conn() as conn:
+        row = _row(conn, sql, (prefijo,))
+    return float(row["total"])
+
+
+def patrimonio_inventario() -> list:
+    """Retorna el valor en inventario por producto (stock actual × costo FIFO ponderado)."""
+    sql = """
+        SELECT
+            li.product_id,
+            MAX(li.sku)                                                        AS sku,
+            COALESCE(SUM(li.cantidad_actual), 0)                               AS stock_actual,
+            ROUND(
+                CASE WHEN SUM(li.cantidad_actual) > 0
+                     THEN SUM(li.cantidad_actual * li.precio_compra_unitario)
+                          / SUM(li.cantidad_actual)
+                     ELSE 0
+                END, 2)                                                        AS costo_prom,
+            ROUND(
+                COALESCE(SUM(li.cantidad_actual * li.precio_compra_unitario), 0)
+            , 2)                                                               AS valor_inventario
+        FROM lotes_inventario li
+        GROUP BY li.product_id
+        HAVING COALESCE(SUM(li.cantidad_actual), 0) > 0
+        ORDER BY valor_inventario DESC
+    """
+    with _conn() as conn:
+        return _rows(conn, sql)

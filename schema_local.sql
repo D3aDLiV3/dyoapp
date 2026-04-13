@@ -29,3 +29,14 @@ CREATE TABLE IF NOT EXISTS ventas_procesadas (
     utilidad_neta DECIMAL(10, 2),
     fecha_venta DATETIME
 );
+
+-- Tabla de Gastos Operativos (salarios, arriendo, servicios, etc.)
+CREATE TABLE IF NOT EXISTS gastos_operativos (
+    id_gasto       INTEGER PRIMARY KEY AUTOINCREMENT,
+    categoria      TEXT    NOT NULL, -- Salario | Arriendo | Servicios | Transporte | Publicidad | Otro
+    descripcion    TEXT,
+    monto          DECIMAL(12, 2) NOT NULL,
+    fecha          DATE    NOT NULL,
+    recurrente     INTEGER NOT NULL DEFAULT 0, -- 0=único, 1=recurrente
+    fecha_registro DATETIME DEFAULT CURRENT_TIMESTAMP
+);
