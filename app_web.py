@@ -2227,163 +2227,279 @@ def pagina_finanzas():
         from datetime import date as _date_af
 
         def _dep_activo(a, hoy=None):
-            """Calcula depreciación línea recta para un activo."""
+            """Depreciación línea recta. Retorna ceros si fecha desconocida."""
             if hoy is None:
                 hoy = _date_af.today()
-            fecha_adq = _date_af.fromisoformat(str(a["fecha_adquisicion"])[:10])
-            meses = max(0, (hoy.year - fecha_adq.year) * 12 + (hoy.month - fecha_adq.month))
-            costo    = float(a["costo_adquisicion"])
+            fecha_str = str(a.get("fecha_adquisicion") or "")[:10]
+            costo    = float(a["costo_adquisicion"] or 0)
             residual = float(a["valor_residual"] or 0)
-            vida_m   = int(a["vida_util_anios"]) * 12
-            dep_m    = (costo - residual) / vida_m if vida_m > 0 else 0
-            dep_acum = min(meses * dep_m, costo - residual)
+            if not fecha_str:
+                return {"dep_mensual": 0, "dep_acumulada": 0, "valor_libros": costo,
+                        "pct_dep": 0, "meses_uso": 0, "fecha_ok": False}
+            try:
+                fecha_adq = _date_af.fromisoformat(fecha_str)
+            except ValueError:
+                return {"dep_mensual": 0, "dep_acumulada": 0, "valor_libros": costo,
+                        "pct_dep": 0, "meses_uso": 0, "fecha_ok": False}
+            meses  = max(0, (hoy.year - fecha_adq.year) * 12 + (hoy.month - fecha_adq.month))
+            vida_m = int(a["vida_util_anios"]) * 12
+            dep_m  = (costo - residual) / vida_m if vida_m > 0 else 0
+            dep_ac = min(meses * dep_m, costo - residual)
             return {
                 "dep_mensual":   dep_m,
-                "dep_acumulada": dep_acum,
-                "valor_libros":  costo - dep_acum,
-                "pct_dep":       (dep_acum / (costo - residual) * 100) if (costo - residual) > 0 else 100.0,
+                "dep_acumulada": dep_ac,
+                "valor_libros":  costo - dep_ac,
+                "pct_dep":       (dep_ac / (costo - residual) * 100) if (costo - residual) > 0 else 100.0,
                 "meses_uso":     meses,
+                "fecha_ok":      True,
             }
 
         hoy_af = _date_af.today()
         activos = db.listar_activos(solo_activos=False)
         activos_en_uso = [a for a in activos if a["activo"]]
 
+        # ── Importar inventario inicial (solo cuando la tabla está vacía) ────
+        if not activos:
+            st.info("📋 No hay activos registrados aún. Puedes cargar el inventario inicial o registrar manualmente.")
+            if st.button("📥 Cargar inventario inicial (100 items)", type="primary",
+                         key="btn_import_af"):
+                n = db.importar_activos_iniciales()
+                if n > 0:
+                    st.success(f"✅ {n} activos importados correctamente. Recarga para continuar.")
+                    st.rerun()
+                else:
+                    st.warning("Ya hay datos registrados.")
+
         # ── KPIs ──────────────────────────────────────────────────────
-        total_costo    = sum(float(a["costo_adquisicion"]) for a in activos_en_uso)
-        total_libros   = sum(_dep_activo(a)["valor_libros"] for a in activos_en_uso)
-        dep_mes_total  = sum(_dep_activo(a)["dep_mensual"] for a in activos_en_uso)
-        total_dep_acum = total_costo - total_libros
+        if activos_en_uso:
+            total_costo   = sum(float(a["costo_adquisicion"] or 0) for a in activos_en_uso)
+            total_libros  = sum(_dep_activo(a)["valor_libros"] for a in activos_en_uso)
+            dep_mes_tot   = sum(_dep_activo(a)["dep_mensual"] for a in activos_en_uso)
+            dep_acum_tot  = total_costo - total_libros
+            n_bajas       = len(activos) - len(activos_en_uso)
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("En uso",             len(activos_en_uso))
+            k2.metric("Dados de baja",      n_bajas)
+            k3.metric("Costo total",        f"${total_costo:,.0f}")
+            k4.metric("Valor en libros",    f"${total_libros:,.0f}")
+            k5.metric("Dep. mensual total", f"${dep_mes_tot:,.0f}")
+            st.markdown("---")
 
-        ak1, ak2, ak3, ak4 = st.columns(4)
-        ak1.metric("Costo total activos",    f"${total_costo:,.0f}")
-        ak2.metric("Valor en libros",        f"${total_libros:,.0f}")
-        ak3.metric("Dep. acumulada",         f"${total_dep_acum:,.0f}")
-        ak4.metric("Dep. mensual (total)",   f"${dep_mes_total:,.0f}")
+        # ── Filtros ────────────────────────────────────────────────────
+        if activos:
+            fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 2])
+            _div_opts    = ["Todas"] + sorted({a["division"] or "Sin división" for a in activos})
+            _cat_opts    = ["Todas"] + sorted({a["categoria"] for a in activos})
+            _est_opts    = ["Todos", "En uso", "Dados de baja"]
+            filtro_div   = fc1.selectbox("División",  _div_opts, key="af_f_div")
+            filtro_cat   = fc2.selectbox("Categoría", _cat_opts, key="af_f_cat")
+            filtro_est   = fc3.selectbox("Estado",    _est_opts, key="af_f_est")
+            buscar_af    = fc4.text_input("Buscar",   key="af_buscar", placeholder="Nombre…")
 
-        st.markdown("---")
+            def _filtrar_af(lista):
+                for a in lista:
+                    div_a = a["division"] or "Sin división"
+                    if filtro_div != "Todas" and div_a != filtro_div:      continue
+                    if filtro_cat != "Todas" and a["categoria"] != filtro_cat: continue
+                    if filtro_est == "En uso"         and not a["activo"]: continue
+                    if filtro_est == "Dados de baja"  and a["activo"]:     continue
+                    if buscar_af and buscar_af.lower() not in a["nombre"].lower(): continue
+                    yield a
+
+            lista_filtrada = list(_filtrar_af(activos))
+
+            # ── Tabla principal ────────────────────────────────────────
+            rows_a = []
+            for a in lista_filtrada:
+                d       = _dep_activo(a, hoy_af)
+                fdq_str = str(a["fecha_adquisicion"] or "")[:10]
+                fi_str  = str(a["fecha_ingreso"]     or "")[:10]
+                rows_a.append({
+                    "#":            a["id_activo"],
+                    "Nombre":       a["nombre"],
+                    "División":     a["division"] or "—",
+                    "Categoría":    a["categoria"],
+                    "Costo":        float(a["costo_adquisicion"] or 0),
+                    "V. Comercial": float(a["valor_comercial"]   or 0),
+                    "V. Libros":    round(d["valor_libros"], 0),
+                    "Dep./mes":     round(d["dep_mensual"],  0),
+                    "% Dep.":       f"{d['pct_dep']:.1f}%" if d["fecha_ok"] else "—",
+                    "F. Compra":    fdq_str or "—",
+                    "F. Ingreso":   fi_str  or "—",
+                    "Estado":       "✅ En uso" if a["activo"] else "⛔ Baja",
+                    "Motivo baja":  a.get("motivo_baja")     or "",
+                    "Disposición":  a.get("disposicion_baja") or "",
+                })
+
+            df_af = pd.DataFrame(rows_a)
+            if not df_af.empty:
+                st.dataframe(
+                    df_af.style.format({
+                        "Costo":        "${:,.0f}",
+                        "V. Comercial": "${:,.0f}",
+                        "V. Libros":    "${:,.0f}",
+                        "Dep./mes":     "${:,.0f}",
+                    }).apply(
+                        lambda col: ["color:#e74c3c" if v == "⛔ Baja" else "" for v in col],
+                        subset=["Estado"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400,
+                )
+                _df_download(df_af, "activos_fijos.xlsx")
+            else:
+                st.info("Sin resultados para los filtros seleccionados.")
+
+            st.markdown("---")
 
         # ── Formulario registrar activo ────────────────────────────────
-        with st.expander("Registrar activo fijo", expanded=False):
+        with st.expander("➕ Registrar activo fijo", expanded=False):
             with st.form("form_nuevo_activo", clear_on_submit=True):
-                af1, af2 = st.columns(2)
-                nombre_a = af1.text_input("Nombre del activo",
-                                          placeholder="Ej: Moto Yamaha FZ 2024")
-                cat_a    = af2.selectbox("Categoría",
-                                         list(db.CATEGORIAS_ACTIVO.keys()))
-                af3, af4, af5 = st.columns(3)
-                costo_a    = af3.number_input("Costo adquisición ($)",
-                                              min_value=0.0, step=10000.0, format="%.0f")
-                residual_a = af4.number_input("Valor residual ($)",
-                                              min_value=0.0, step=1000.0, format="%.0f",
+                na1, na2, na3 = st.columns(3)
+                nombre_a = na1.text_input("Nombre del activo", placeholder='Ej: Monitor Dell 27"')
+                cat_a    = na2.selectbox("Categoría", list(db.CATEGORIAS_ACTIVO.keys()))
+                div_a    = na3.selectbox("División", db.DIVISIONES_ACTIVO,
+                                         format_func=lambda x: x or "— Sin división —")
+                na4, na5, na6, na7 = st.columns(4)
+                costo_a    = na4.number_input("Costo adquisición ($)", min_value=0.0, step=10000.0, format="%.0f")
+                residual_a = na5.number_input("Valor residual ($)",    min_value=0.0, step=1000.0,  format="%.0f",
                                               help="Valor estimado al final de su vida útil (puede ser 0)")
-                vida_a     = af5.number_input("Vida útil (años)",
-                                              min_value=1, max_value=50,
+                vc_a       = na6.number_input("Valor comercial ($)",   min_value=0.0, step=10000.0, format="%.0f")
+                vida_a     = na7.number_input("Vida útil (años)", min_value=1, max_value=50,
                                               value=db.CATEGORIAS_ACTIVO[cat_a])
-                af6, af7 = st.columns(2)
-                fecha_a = af6.date_input("Fecha de adquisición", value=hoy_af)
-                notas_a = af7.text_input("Notas", placeholder="Opcional")
-
-                # Preview depreciación
+                na8, na9, na10 = st.columns(3)
+                fecha_cpa = na8.date_input("Fecha de compra",   value=hoy_af, key="naf_fcomp")
+                fecha_ina = na9.date_input("Fecha de ingreso",  value=hoy_af, key="naf_fing")
+                notas_a   = na10.text_input("Notas", placeholder="Opcional")
                 if costo_a > 0 and vida_a > 0:
-                    _prev_dep_m = (costo_a - residual_a) / (vida_a * 12)
-                    st.caption(
-                        f"📉 Depreciación mensual estimada: **${_prev_dep_m:,.0f}**/mes  "
-                        f"→  **${_prev_dep_m * 12:,.0f}**/año  "
-                        f"(vida útil {vida_a} años)"
-                    )
-
-                if st.form_submit_button("Guardar activo", type="primary",
-                                         use_container_width=True):
+                    _pd = (costo_a - residual_a) / (vida_a * 12)
+                    st.caption(f"📉 Dep. estimada: **${_pd:,.0f}**/mes → **${_pd*12:,.0f}**/año")
+                if st.form_submit_button("💾 Guardar", type="primary", use_container_width=True):
                     if not nombre_a.strip():
                         st.error("Ingresa el nombre del activo.")
-                    elif costo_a <= 0:
-                        st.error("El costo debe ser mayor a 0.")
-                    elif residual_a >= costo_a:
+                    elif residual_a >= costo_a > 0:
                         st.error("El valor residual no puede ser mayor o igual al costo.")
                     else:
-                        db.registrar_activo(nombre_a.strip(), cat_a, costo_a, residual_a,
-                                            str(fecha_a), int(vida_a), notas_a.strip())
-                        st.success(f"Activo '{nombre_a}' registrado.")
+                        db.registrar_activo(
+                            nombre_a.strip(), cat_a, costo_a, residual_a,
+                            str(fecha_cpa), int(vida_a), notas_a.strip(),
+                            division=div_a, valor_comercial=vc_a,
+                            fecha_ingreso=str(fecha_ina),
+                        )
+                        st.success(f"✅ Activo '{nombre_a}' registrado.")
                         st.rerun()
 
-        # ── Tabla de activos ───────────────────────────────────────────
-        if activos:
-            st.markdown("#### Activos registrados")
-            _mostrar_bajas = st.checkbox("Mostrar activos dados de baja", value=False)
-            _lista_mostrar = activos if _mostrar_bajas else activos_en_uso
+        # ── Editar activo ──────────────────────────────────────────────
+        with st.expander("✏️ Editar activo", expanded=False):
+            if not activos:
+                st.info("Sin activos registrados aún.")
+            else:
+                _edit_id = st.selectbox(
+                    "Seleccionar activo",
+                    [a["id_activo"] for a in activos],
+                    format_func=lambda x: f"#{x} — {next((a['nombre'] for a in activos if a['id_activo']==x), '')}",
+                    key="af_edit_sel",
+                )
+                _ea = next((a for a in activos if a["id_activo"] == _edit_id), None)
+                if _ea:
+                    with st.form("form_editar_activo"):
+                        e1, e2, e3 = st.columns(3)
+                        e_nombre = e1.text_input("Nombre", value=_ea["nombre"])
+                        _cat_keys = list(db.CATEGORIAS_ACTIVO.keys())
+                        _cat_idx  = _cat_keys.index(_ea["categoria"]) if _ea["categoria"] in _cat_keys else 0
+                        e_cat  = e2.selectbox("Categoría", _cat_keys, index=_cat_idx)
+                        _divs    = db.DIVISIONES_ACTIVO
+                        _div_idx = _divs.index(_ea["division"]) if _ea["division"] in _divs else len(_divs) - 1
+                        e_div  = e3.selectbox("División", _divs, index=_div_idx,
+                                              format_func=lambda x: x or "— Sin división —")
+                        e4, e5, e6, e7 = st.columns(4)
+                        e_costo    = e4.number_input("Costo ($)",        value=float(_ea["costo_adquisicion"] or 0), min_value=0.0, format="%.0f")
+                        e_residual = e5.number_input("V. Residual ($)",  value=float(_ea["valor_residual"]    or 0), min_value=0.0, format="%.0f")
+                        e_vc       = e6.number_input("V. Comercial ($)", value=float(_ea["valor_comercial"]   or 0), min_value=0.0, format="%.0f")
+                        e_vida     = e7.number_input("Vida útil (años)", value=int(_ea["vida_util_anios"]), min_value=1, max_value=50)
+                        e8, e9, e10 = st.columns(3)
+                        _fdq     = _ea.get("fecha_adquisicion")
+                        _fdq_val = _date_af.fromisoformat(str(_fdq)[:10]) if _fdq else hoy_af
+                        _fi      = _ea.get("fecha_ingreso")
+                        _fi_val  = _date_af.fromisoformat(str(_fi)[:10]) if _fi else hoy_af
+                        e_fcomp = e8.date_input("Fecha de compra",  value=_fdq_val, key="eaf_fcomp")
+                        e_fing  = e9.date_input("Fecha de ingreso", value=_fi_val,  key="eaf_fing")
+                        e_notas = e10.text_input("Notas", value=_ea.get("notas") or "")
+                        if st.form_submit_button("💾 Guardar cambios", type="primary", use_container_width=True):
+                            db.actualizar_activo(
+                                _edit_id, e_nombre.strip(), e_cat, e_div,
+                                e_costo, e_residual, e_vc,
+                                str(e_fcomp), str(e_fing),
+                                e_vida, e_notas.strip(),
+                            )
+                            st.success("✅ Activo actualizado.")
+                            st.rerun()
 
-            rows_a = []
-            for a in _lista_mostrar:
-                d = _dep_activo(a, hoy_af)
-                rows_a.append({
-                    "ID":             a["id_activo"],
-                    "Nombre":         a["nombre"],
-                    "Categoría":      a["categoria"],
-                    "Costo":          f"${float(a['costo_adquisicion']):,.0f}",
-                    "Valor libros":   f"${d['valor_libros']:,.0f}",
-                    "Dep./mes":       f"${d['dep_mensual']:,.0f}",
-                    "% Depreciado":   f"{d['pct_dep']:.1f}%",
-                    "Meses uso":      d["meses_uso"],
-                    "Vida útil":      f"{a['vida_util_anios']}a",
-                    "Estado":         "✅ En uso" if a["activo"] else "⛔ Baja",
-                })
-            st.dataframe(pd.DataFrame(rows_a), use_container_width=True, hide_index=True)
-
-            # Barras de depreciación visual
-            if activos_en_uso:
-                st.markdown("#### Estado de depreciación")
-                for a in activos_en_uso:
-                    d = _dep_activo(a, hoy_af)
-                    pct = min(d["pct_dep"], 100.0)
-                    color = "#10B981" if pct < 50 else ("#F59E0B" if pct < 80 else "#D42B2B")
-                    st.markdown(
-                        f"**{a['nombre']}** ({a['categoria']})  "
-                        f"— Valor libros: **${d['valor_libros']:,.0f}** "
-                        f"| Dep./mes: ${d['dep_mensual']:,.0f}"
+        # ── Dar de baja ────────────────────────────────────────────────
+        with st.expander("⛔ Dar de baja", expanded=False):
+            ids_en_uso = [a["id_activo"] for a in activos_en_uso]
+            if not ids_en_uso:
+                st.info("No hay activos en uso para dar de baja.")
+            else:
+                _nb_map = {a["id_activo"]: a["nombre"] for a in activos}
+                with st.form("form_baja_activo"):
+                    baja_id = st.selectbox(
+                        "Activo a dar de baja",
+                        ids_en_uso,
+                        format_func=lambda x: f"#{x} — {_nb_map[x]}",
+                        key="af_baja_sel",
                     )
-                    _meses_rest = int(a["vida_util_anios"]) * 12 - d["meses_uso"]
-                    _txt_rest   = "Vida útil cumplida" if pct >= 100 else f"{_meses_rest} meses restantes"
-                    st.progress(int(pct) / 100,
-                                text=f"{pct:.1f}% depreciado ({_txt_rest})")
+                    b1, b2, b3 = st.columns(3)
+                    baja_motivo = b1.text_input("Motivo de baja",
+                                                placeholder="Ej: Dañado, Robado, Obsoleto…")
+                    baja_dispos = b2.text_input("Disposición",
+                                                placeholder="Ej: Desechado, Donado, En bodega…")
+                    baja_fecha  = b3.date_input("Fecha de baja", value=hoy_af)
+                    if st.form_submit_button("⛔ Confirmar baja", type="primary",
+                                             use_container_width=True):
+                        db.dar_baja_activo(baja_id, baja_motivo.strip(),
+                                           baja_dispos.strip(), str(baja_fecha))
+                        st.success(f"Activo #{baja_id} dado de baja.")
+                        st.rerun()
 
-            # Dar de baja / eliminar
-            st.markdown("")
-            with st.expander("Gestionar activo"):
-                gc1, gc2 = st.columns(2)
-                ids_activos = [a["id_activo"] for a in activos_en_uso]
-                ids_todos   = [a["id_activo"] for a in activos]
-                _nombres_map = {a["id_activo"]: a["nombre"] for a in activos}
+        # ── Eliminar definitivamente ───────────────────────────────────
+        with st.expander("🗑️ Eliminar activo definitivamente", expanded=False):
+            if not activos:
+                st.info("Sin activos registrados aún.")
+            else:
+                _nb_map2 = {a["id_activo"]: a["nombre"] for a in activos}
+                del_id_a = st.selectbox(
+                    "Activo a eliminar",
+                    [a["id_activo"] for a in activos],
+                    format_func=lambda x: f"#{x} — {_nb_map2[x]}",
+                    key="af_del_id",
+                )
+                st.warning("⚠️ Esta acción es irreversible y elimina el registro permanentemente.")
+                if st.button("🗑️ Eliminar definitivamente", key="btn_del_activo", type="secondary"):
+                    db.eliminar_activo(del_id_a)
+                    st.success(f"Activo #{del_id_a} eliminado.")
+                    st.rerun()
 
-                with gc1:
-                    if ids_activos:
-                        baja_id = st.selectbox(
-                            "Dar de baja (activo en uso)",
-                            ids_activos,
-                            format_func=lambda x: f"#{x} — {_nombres_map[x]}",
-                            key="af_baja_id"
-                        )
-                        if st.button("⛔ Dar de baja", key="btn_baja_activo"):
-                            db.dar_baja_activo(baja_id)
-                            st.success(f"Activo #{baja_id} marcado como baja.")
-                            st.rerun()
-                    else:
-                        st.info("No hay activos en uso.")
-                with gc2:
-                    if ids_todos:
-                        del_id_a = st.selectbox(
-                            "Eliminar definitivamente",
-                            ids_todos,
-                            format_func=lambda x: f"#{x} — {_nombres_map[x]}",
-                            key="af_del_id"
-                        )
-                        if st.button("🗑️ Eliminar activo", key="btn_del_activo",
-                                     type="secondary"):
-                            db.eliminar_activo(del_id_a)
-                            st.success(f"Activo #{del_id_a} eliminado.")
-                            st.rerun()
-        else:
-            st.info("Sin activos fijos registrados aún.")
+        # ── Barras de depreciación (colapsable) ────────────────────────
+        if activos_en_uso:
+            with st.expander("📉 Estado de depreciación (activos en uso)", expanded=False):
+                _en_uso_vis = [a for a in activos_en_uso
+                               if a["activo"] and _dep_activo(a, hoy_af)["fecha_ok"]]
+                _sin_fecha  = [a for a in activos_en_uso
+                               if a["activo"] and not _dep_activo(a, hoy_af)["fecha_ok"]]
+                for a in _en_uso_vis:
+                    d   = _dep_activo(a, hoy_af)
+                    pct = min(d["pct_dep"], 100.0)
+                    _mr = int(a["vida_util_anios"]) * 12 - d["meses_uso"]
+                    _txt = "Vida útil cumplida" if pct >= 100 else f"{_mr}m restantes"
+                    st.markdown(
+                        f"**{a['nombre']}** ({a['division'] or a['categoria']})  "
+                        f"— V. Libros: **${d['valor_libros']:,.0f}** | Dep./mes: ${d['dep_mensual']:,.0f}"
+                    )
+                    st.progress(int(pct) / 100, text=f"{pct:.1f}% dep. ({_txt})")
+                if _sin_fecha:
+                    st.caption(f"⚠️ {len(_sin_fecha)} activos sin fecha de compra (depreciación no calculada).")
 
     # ═══════════════════════════════════════════════════════════════════
     #  TAB 3: PATRIMONIO
@@ -2394,9 +2510,15 @@ def pagina_finanzas():
         def _dep_activo_p(a, hoy=None):
             if hoy is None:
                 hoy = _date_patr.today()
-            fecha_adq = _date_patr.fromisoformat(str(a["fecha_adquisicion"])[:10])
-            meses = max(0, (hoy.year - fecha_adq.year) * 12 + (hoy.month - fecha_adq.month))
-            costo    = float(a["costo_adquisicion"])
+            fecha_str = str(a.get("fecha_adquisicion") or "")[:10]
+            costo = float(a["costo_adquisicion"] or 0)
+            if not fecha_str:
+                return costo
+            try:
+                fecha_adq = _date_patr.fromisoformat(fecha_str)
+            except ValueError:
+                return costo
+            meses    = max(0, (hoy.year - fecha_adq.year) * 12 + (hoy.month - fecha_adq.month))
             residual = float(a["valor_residual"] or 0)
             vida_m   = int(a["vida_util_anios"]) * 12
             dep_m    = (costo - residual) / vida_m if vida_m > 0 else 0

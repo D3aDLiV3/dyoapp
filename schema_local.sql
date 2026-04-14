@@ -40,13 +40,19 @@ CREATE TABLE IF NOT EXISTS activos_fijos (
     id_activo         INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre            TEXT NOT NULL,
     categoria         TEXT NOT NULL,
-    costo_adquisicion DECIMAL(12,2) NOT NULL,
+    division          TEXT DEFAULT '',
+    costo_adquisicion DECIMAL(12,2) NOT NULL DEFAULT 0,
     valor_residual    DECIMAL(12,2) DEFAULT 0,
-    fecha_adquisicion DATE NOT NULL,
-    vida_util_anios   INTEGER NOT NULL,
+    valor_comercial   DECIMAL(12,2) DEFAULT 0,
+    fecha_adquisicion DATE,
+    fecha_ingreso     DATE,
+    vida_util_anios   INTEGER NOT NULL DEFAULT 5,
     activo            INTEGER DEFAULT 1,  -- 1=en uso, 0=dado de baja
     notas             TEXT,
-    fecha_registro    DATETIME DEFAULT CURRENT_TIMESTAMP
+    fecha_registro    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    motivo_baja       TEXT,
+    disposicion_baja  TEXT,
+    fecha_baja        DATE
 );
 
 -- Tabla de Gastos Operativos (salarios, arriendo, servicios, etc.)
