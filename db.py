@@ -66,6 +66,18 @@ _SCHEMA_PG = [
         recurrente     SMALLINT NOT NULL DEFAULT 0,
         fecha_registro TIMESTAMP DEFAULT NOW()
     )""",
+    """CREATE TABLE IF NOT EXISTS activos_fijos (
+        id_activo         SERIAL PRIMARY KEY,
+        nombre            TEXT NOT NULL,
+        categoria         TEXT NOT NULL,
+        costo_adquisicion DECIMAL(12,2) NOT NULL,
+        valor_residual    DECIMAL(12,2) DEFAULT 0,
+        fecha_adquisicion DATE NOT NULL,
+        vida_util_anios   INTEGER NOT NULL,
+        activo            SMALLINT DEFAULT 1,
+        notas             TEXT,
+        fecha_registro    TIMESTAMP DEFAULT NOW()
+    )""",
 ]
 
 # ── Helpers internos ──────────────────────────────────────────────────────────
@@ -527,6 +539,16 @@ def ultimas_ocs(limit: int = 5) -> list:
 # ── Gastos Operativos ────────────────────────────────────────────────────────
 CATEGORIAS_GASTO = ["Salario", "Arriendo", "Servicios públicos", "Transporte", "Publicidad", "Otro"]
 
+# Categorías de activos fijos → vida útil estándar en años (Colombia)
+CATEGORIAS_ACTIVO = {
+    "Muebles/Vitrinas":    10,
+    "Equipos de cómputo":   5,
+    "Vehículos/Motos":      5,
+    "Cámaras/Seguridad":    5,
+    "Maquinaria/Equipos":  10,
+    "Otro":                 5,
+}
+
 
 def registrar_gasto(categoria: str, descripcion: str, monto: float,
                     fecha: str, recurrente: bool = False) -> int:
@@ -633,3 +655,44 @@ def patrimonio_inventario() -> list:
     """
     with _conn() as conn:
         return _rows(conn, sql)
+
+
+# ── Activos Fijos ────────────────────────────────────────────────────────────
+
+def registrar_activo(nombre: str, categoria: str, costo: float, valor_residual: float,
+                     fecha_adquisicion: str, vida_util_anios: int, notas: str = "") -> int:
+    fecha_reg = _datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sql = """
+        INSERT INTO activos_fijos
+            (nombre, categoria, costo_adquisicion, valor_residual,
+             fecha_adquisicion, vida_util_anios, activo, notas, fecha_registro)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+    """
+    with _conn() as conn:
+        return _insert(conn, sql,
+                       (nombre, categoria, costo, valor_residual,
+                        fecha_adquisicion, vida_util_anios, notas or None, fecha_reg),
+                       "id_activo")
+
+
+def listar_activos(solo_activos: bool = False) -> list:
+    where = "WHERE activo = 1" if solo_activos else ""
+    sql = f"""
+        SELECT id_activo, nombre, categoria, costo_adquisicion, valor_residual,
+               fecha_adquisicion, vida_util_anios, activo, notas
+        FROM activos_fijos
+        {where}
+        ORDER BY fecha_adquisicion DESC
+    """
+    with _conn() as conn:
+        return _rows(conn, sql)
+
+
+def dar_baja_activo(id_activo: int):
+    with _conn() as conn:
+        _exec(conn, "UPDATE activos_fijos SET activo = 0 WHERE id_activo = ?", (id_activo,))
+
+
+def eliminar_activo(id_activo: int):
+    with _conn() as conn:
+        _exec(conn, "DELETE FROM activos_fijos WHERE id_activo = ?", (id_activo,))

@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS ventas_procesadas (
     fecha_venta DATETIME
 );
 
+-- Tabla de Activos Fijos (equipos, muebles, vehículos, etc.)
+CREATE TABLE IF NOT EXISTS activos_fijos (
+    id_activo         INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre            TEXT NOT NULL,
+    categoria         TEXT NOT NULL,
+    costo_adquisicion DECIMAL(12,2) NOT NULL,
+    valor_residual    DECIMAL(12,2) DEFAULT 0,
+    fecha_adquisicion DATE NOT NULL,
+    vida_util_anios   INTEGER NOT NULL,
+    activo            INTEGER DEFAULT 1,  -- 1=en uso, 0=dado de baja
+    notas             TEXT,
+    fecha_registro    DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Tabla de Gastos Operativos (salarios, arriendo, servicios, etc.)
 CREATE TABLE IF NOT EXISTS gastos_operativos (
     id_gasto       INTEGER PRIMARY KEY AUTOINCREMENT,

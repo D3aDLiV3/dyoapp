@@ -1667,19 +1667,40 @@ def pagina_analisis():
         if ventas:
             filas_v = [dict(row) for row in ventas]
             df_ut = pd.DataFrame(filas_v)
+
+            # Enriquecer con nombre desde caché WooCommerce
+            nombre_map_ut: dict[int, str] = {}
+            try:
+                for p in _cargar_woo_cache():
+                    nombre_map_ut[int(p["id"])] = p.get("name", "") or ""
+            except Exception:
+                pass
+            df_ut.insert(2, "nombre", df_ut["product_id"].map(nombre_map_ut).fillna("—"))
+
             df_ut.rename(columns={
                 "fecha_venta": "Fecha", "order_id_woo": "Orden WOO",
-                "product_id": "Product ID", "sku": "SKU",
+                "product_id": "Product ID", "nombre": "Nombre", "sku": "SKU",
                 "cantidad_vendida": "Cant.", "precio_venta_unitario": "P. Venta",
                 "costo_unitario": "Costo Unit.", "utilidad_neta": "Utilidad Neta",
             }, inplace=True)
+
             utilidad_total = df_ut["Utilidad Neta"].sum()
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Utilidad Total", f"${utilidad_total:,.2f}")
+            col_m1.metric("Utilidad Total", f"${utilidad_total:,.0f}")
             col_m2.metric("Ventas procesadas", len(df_ut))
             col_m3.metric("Ticket promedio",
-                          f"${df_ut['P. Venta'].mean():,.2f}" if len(df_ut) else "$0")
-            st.dataframe(df_ut, use_container_width=True, hide_index=True, height=600)
+                          f"${df_ut['P. Venta'].mean():,.0f}" if len(df_ut) else "$0")
+
+            st.dataframe(
+                df_ut.style.format({
+                    "P. Venta":     "${:,.0f}",
+                    "Costo Unit.":  "${:,.0f}",
+                    "Utilidad Neta": "${:,.0f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=600,
+            )
             _df_download(df_ut, "utilidades.xlsx")
         else:
             st.info("Sin ventas procesadas. Ve a 'Importar Ventas' primero.")
