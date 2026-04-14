@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS ordenes_compra (
     id_oc INTEGER PRIMARY KEY AUTOINCREMENT,
     proveedor TEXT,
     fecha_ingreso DATETIME DEFAULT CURRENT_TIMESTAMP,
-    notas TEXT
+    notas TEXT,
+    iva_total DECIMAL(12,2) DEFAULT 0
 );
 
 -- Tabla de Lotes (Lógica FIFO)

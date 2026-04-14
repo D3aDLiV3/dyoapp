@@ -34,7 +34,8 @@ _SCHEMA_PG = [
         id_oc         SERIAL PRIMARY KEY,
         proveedor     TEXT,
         fecha_ingreso TIMESTAMP DEFAULT NOW(),
-        notas         TEXT
+        notas         TEXT,
+        iva_total     DECIMAL(12,2) DEFAULT 0
     )""",
     """CREATE TABLE IF NOT EXISTS lotes_inventario (
         id_lote                SERIAL PRIMARY KEY,
@@ -151,18 +152,28 @@ def init_db():
             for stmt in _SCHEMA_PG:
                 with conn.cursor() as cur:
                     cur.execute(stmt)
+            # Migración: agregar iva_total si no existe
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE ordenes_compra
+                    ADD COLUMN IF NOT EXISTS iva_total DECIMAL(12,2) DEFAULT 0
+                """)
     else:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
         with _conn() as conn:
             conn.executescript(schema)
+            # Migración: agregar iva_total si no existe
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(ordenes_compra)").fetchall()]
+            if "iva_total" not in cols:
+                conn.execute("ALTER TABLE ordenes_compra ADD COLUMN iva_total DECIMAL(12,2) DEFAULT 0")
 
 
 # ── Órdenes de Compra ─────────────────────────────────────────────────────────
 
-def crear_orden_compra(proveedor: str, notas: str = "") -> int:
-    sql = "INSERT INTO ordenes_compra (proveedor, notas) VALUES (?, ?)"
+def crear_orden_compra(proveedor: str, notas: str = "", iva_total: float = 0.0) -> int:
+    sql = "INSERT INTO ordenes_compra (proveedor, notas, iva_total) VALUES (?, ?, ?)"
     with _conn() as conn:
-        return _insert(conn, sql, (proveedor, notas), "id_oc")
+        return _insert(conn, sql, (proveedor, notas, iva_total), "id_oc")
 
 
 def listar_ordenes_compra() -> list:

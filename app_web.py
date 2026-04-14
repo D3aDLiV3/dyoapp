@@ -200,6 +200,7 @@ _DEFAULTS = {
     "oc_items":           [],
     "oc_producto_actual": None,
     "oc_guardando":       False,
+    "oc_iva_incluido":    False,
     "et_items":           [],
     "et_producto_actual": None,
     "et_oc_items":        None,
@@ -578,13 +579,38 @@ def pagina_oc():
         if st.session_state.oc_producto_actual and not st.session_state.get("_oc_just_added"):
             pass  # Conservar selección hasta que se agregue o limpie
 
-    cols = st.columns([1, 1.5])
+    cols = st.columns([1, 1.5, 1])
     with cols[0]:
         cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1,
                                    key="oc_cant")
     with cols[1]:
         precio = st.number_input("Precio Compra $", min_value=0.0, value=0.0,
                                  step=0.01, format="%.2f", key="oc_precio")
+    with cols[2]:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        iva_incluido = st.checkbox(
+            "Precio IVA incluido",
+            key="oc_iva_incluido",
+            help="Marca si el precio que ingresas YA incluye el 19% de IVA. "
+                 "Si no está marcado, se sumará el 19% automáticamente.",
+        )
+
+    # Calcular precio final e IVA unitario
+    _IVA = 0.19
+    if iva_incluido:
+        precio_final   = precio
+        iva_unitario   = round(precio - precio / (1 + _IVA), 2)
+        precio_sin_iva = round(precio / (1 + _IVA), 2)
+    else:
+        precio_final   = round(precio * (1 + _IVA), 2)
+        iva_unitario   = round(precio * _IVA, 2)
+        precio_sin_iva = precio
+
+    if precio > 0:
+        if iva_incluido:
+            st.caption(f"Base: ${precio_sin_iva:,.2f}  +  IVA: ${iva_unitario:,.2f}  =  **${precio_final:,.2f}**")
+        else:
+            st.caption(f"${precio:,.2f}  +  19% IVA (${iva_unitario:,.2f})  =  **${precio_final:,.2f}**")
 
     if st.session_state.oc_producto_actual:
         p = st.session_state.oc_producto_actual
@@ -602,7 +628,8 @@ def pagina_oc():
                 "nombre":        p["nombre"],
                 "sku":           p["sku"],
                 "cantidad":      int(cantidad),
-                "precio_compra": float(precio),
+                "precio_compra": float(precio_final),
+                "iva_unitario":  float(iva_unitario),
             })
             st.session_state.oc_producto_actual = None
             st.rerun()
@@ -611,9 +638,19 @@ def pagina_oc():
     if st.session_state.oc_items:
         st.markdown("#### Ítems de la OC")
         df_oc = pd.DataFrame(st.session_state.oc_items)
-        st.dataframe(df_oc, use_container_width=True, hide_index=True)
-        total = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
-        st.metric("Total OC", f"${total:,.2f}")
+        # Rellenar iva_unitario en items viejos que no lo tengan
+        if "iva_unitario" not in df_oc.columns:
+            df_oc["iva_unitario"] = 0.0
+        df_oc_disp = df_oc[["sku", "nombre", "cantidad", "iva_unitario", "precio_compra"]].copy()
+        df_oc_disp["iva_unitario"]  = df_oc_disp["iva_unitario"].apply(lambda x: f"${x:,.2f}")
+        df_oc_disp["precio_compra"] = df_oc_disp["precio_compra"].apply(lambda x: f"${x:,.2f}")
+        df_oc_disp.columns = ["SKU", "Nombre", "Cantidad", "IVA unitario", "Precio c/IVA"]
+        st.dataframe(df_oc_disp, use_container_width=True, hide_index=True)
+        total     = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
+        total_iva = sum(i["cantidad"] * i.get("iva_unitario", 0) for i in st.session_state.oc_items)
+        mc1, mc2 = st.columns(2)
+        mc1.metric("Total OC (con IVA)", f"${total:,.2f}")
+        mc2.metric("IVA total de la OC",  f"${total_iva:,.2f}")
 
         ba, bb, bc = st.columns([2, 1, 1])
         with ba:
@@ -631,7 +668,11 @@ def pagina_oc():
         if st.session_state.get("oc_guardando"):
             prov = proveedor.strip() or "Sin proveedor"
             try:
-                id_oc = db.crear_orden_compra(prov, notas)
+                total_iva_oc = sum(
+                    i["cantidad"] * i.get("iva_unitario", 0)
+                    for i in st.session_state.oc_items
+                )
+                id_oc = db.crear_orden_compra(prov, notas, total_iva_oc)
                 for item in st.session_state.oc_items:
                     db.crear_lote(id_oc, item["product_id"],
                                   item["sku"], item["cantidad"],
