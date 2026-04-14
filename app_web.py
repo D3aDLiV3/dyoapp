@@ -241,6 +241,7 @@ _DEFAULTS = {
     "dec_rows":           [],
     "autenticado":        False,
     "usuario_actual":     "",
+    "pagina_actual":      "🏠 Inicio",
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -385,6 +386,7 @@ with st.sidebar:
             "📊 Análisis",
             "💰 Finanzas",
         ],
+        key="pagina_actual",
         label_visibility="collapsed",
     )
     st.markdown("---")
