@@ -195,6 +195,7 @@ st.markdown("""
 db.init_db()
 
 # ── Inicializar session_state ─────────────────────────────────────────────────
+_es_sesion_nueva = "autenticado" not in st.session_state
 _DEFAULTS = {
     "oc_items":           [],
     "oc_producto_actual": None,
