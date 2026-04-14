@@ -223,6 +223,29 @@ def _validate_session_token(token: str) -> str:
         pass
     return ""
 
+def _guardar_borrador_oc(usuario: str, items: list):
+    path = Path(__file__).parent / f"_oc_draft_{usuario}.json"
+    try:
+        path.write_text(json.dumps(items), encoding="utf-8")
+    except Exception:
+        pass
+
+def _cargar_borrador_oc(usuario: str) -> list:
+    path = Path(__file__).parent / f"_oc_draft_{usuario}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return []
+
+def _limpiar_borrador_oc(usuario: str):
+    path = Path(__file__).parent / f"_oc_draft_{usuario}.json"
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 # ── Inicializar session_state ─────────────────────────────────────────────────
 _es_sesion_nueva = "autenticado" not in st.session_state
 _DEFAULTS = {
@@ -230,6 +253,7 @@ _DEFAULTS = {
     "oc_producto_actual": None,
     "oc_guardando":       False,
     "oc_iva_incluido":    False,
+    "_oc_sel_ver":        0,
     "et_items":           [],
     "et_producto_actual": None,
     "et_oc_items":        None,
@@ -323,6 +347,10 @@ if not st.session_state.autenticado:
         if _u:
             st.session_state.autenticado    = True
             st.session_state.usuario_actual = _u
+            # Restaurar borrador de OC si lo había
+            _draft = _cargar_borrador_oc(_u)
+            if _draft:
+                st.session_state.oc_items = _draft
             _slog.info(f"SESSION_RESTORED | usuario={_u}")
         else:
             try:
@@ -573,6 +601,7 @@ def _oc_tab_nueva():
                     if st.button(f"✅ Cargar {len(nuevos)} producto(s) a la OC",
                                  type="primary", key="btn_oc_import_confirm"):
                         st.session_state.oc_items = nuevos
+                        _guardar_borrador_oc(st.session_state.usuario_actual, nuevos)
                         st.success(f"{len(nuevos)} productos cargados.")
                         st.rerun()
             except Exception as e:
@@ -596,12 +625,13 @@ def _oc_tab_nueva():
         for p in catalogo
     }
 
+    _sel_key = f"oc_sel_producto_{st.session_state._oc_sel_ver}"
     sel_label = st.selectbox(
         "Buscar producto (SKU o nombre)",
         options=list(_cat_map.keys()),
         index=None,
         placeholder="— Escribe SKU o nombre para buscar —",
-        key="oc_sel_producto",
+        key=_sel_key,
     )
 
     if sel_label:
@@ -611,34 +641,32 @@ def _oc_tab_nueva():
             "nombre": prod_sel.get("name", ""),
             "sku":    prod_sel.get("sku", ""),
         }
-    elif not sel_label and not st.session_state.get("oc_items"):
+    elif not sel_label:
         st.session_state.oc_producto_actual = None
 
     if st.session_state.oc_producto_actual:
         p = st.session_state.oc_producto_actual
         st.info(f"✔ **{p['nombre']}** — WC ID: `{p['id']}`  SKU: `{p['sku']}`")
 
-    iva_incluido = st.checkbox(
-        "Precio IVA incluido (19%)",
-        key="oc_iva_incluido",
-        help="Marca si el precio que ingresas YA incluye el 19% de IVA. "
-             "Si no está marcado, se sumará el 19% automáticamente.",
-    )
-
-    with st.form("form_agregar_item", clear_on_submit=True):
+    with st.form("form_agregar_item"):
         cols = st.columns([1, 2])
         with cols[0]:
             cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
         with cols[1]:
             precio = st.number_input("Precio Compra $", min_value=0.0, value=0.0,
                                      step=0.01, format="%.2f")
+        iva_incluido = st.checkbox(
+            "Precio IVA incluido (19%)",
+            key="oc_iva_incluido",
+            help="Marca si el precio que ingresas YA incluye el 19% de IVA. "
+                 "Si no está marcado, se sumará el 19% automáticamente.",
+        )
         submitted = st.form_submit_button("➕ Agregar a OC", type="primary",
                                           use_container_width=True)
 
     if submitted:
-        _iva_inc = st.session_state.get("oc_iva_incluido", False)
         _IVA = 0.19
-        if _iva_inc:
+        if iva_incluido:
             precio_final = precio
             iva_unitario = round(precio - precio / (1 + _IVA), 2)
         else:
@@ -658,8 +686,9 @@ def _oc_tab_nueva():
                 "precio_compra": float(precio_final),
                 "iva_unitario":  float(iva_unitario),
             })
+            _guardar_borrador_oc(st.session_state.usuario_actual, st.session_state.oc_items)
             st.session_state.oc_producto_actual = None
-            st.session_state.pop("oc_sel_producto", None)
+            st.session_state._oc_sel_ver += 1  # fuerza reset del selectbox
             st.rerun()
 
     st.markdown("---")
@@ -683,6 +712,7 @@ def _oc_tab_nueva():
             c5.caption(f"${row['precio_compra']:,.2f}")
             if c_del.button("🗑️", key=f"del_item_{i}", help="Eliminar este ítem"):
                 st.session_state.oc_items.pop(i)
+                _guardar_borrador_oc(st.session_state.usuario_actual, st.session_state.oc_items)
                 st.rerun()
         st.markdown("")
         total     = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
@@ -720,6 +750,7 @@ def _oc_tab_nueva():
                                               item["cantidad"])
                 n = len(st.session_state.oc_items)
                 st.session_state.oc_items.clear()
+                _limpiar_borrador_oc(st.session_state.usuario_actual)
                 st.session_state.oc_producto_actual = None
                 st.session_state["oc_guardando"] = False
                 _cargar_woo_cache.clear()
@@ -737,6 +768,7 @@ def _oc_tab_nueva():
         with bc:
             if st.button("🗑️ Limpiar lista", key="btn_oc_limpiar"):
                 st.session_state.oc_items.clear()
+                _limpiar_borrador_oc(st.session_state.usuario_actual)
                 st.session_state.oc_producto_actual = None
                 st.rerun()
     else:
