@@ -1399,9 +1399,12 @@ def pagina_analisis():
                 _df_download(df_woo, "stock_woocommerce.xlsx")
 
             # ── Detectar discrepancias de stock ──────────────────────────
-            stock_local = db.stock_local_por_producto()
+            stock_local   = db.stock_local_por_producto()      # OC - ventas importadas
+            oc_inicial    = db.stock_oc_inicial_por_producto()  # solo lo que entró por OC
+            vendido_local = db.ventas_totales_por_producto()    # ventas importadas al sistema
 
-            # WC > local → stock sin OC registrada (huérfano)
+            # WC > (OC_inicial - ventas_importadas) → stock en WC supera lo que el sistema registra
+            # Puede ser: stock pre-existente en WC antes del sistema, o stock agregado fuera del sistema
             huerfanos = [
                 p for p in productos_woo
                 if p.get("manage_stock")
@@ -1409,7 +1412,9 @@ def pagina_analisis():
                 and (p.get("stock_quantity") or 0) > stock_local.get(p.get("id"), 0)
             ]
 
-            # WC < local → stock reducido manualmente en WooCommerce
+            # WC < (OC_inicial - ventas_importadas) → WC tiene menos de lo esperado
+            # CAUSA MÁS COMÚN: ventas en WooCommerce aún no importadas al sistema
+            # También puede ser: reducción manual del stock en WC
             reducidos = [
                 p for p in productos_woo
                 if p.get("manage_stock")
@@ -1418,24 +1423,29 @@ def pagina_analisis():
 
             if reducidos:
                 with st.container(border=True):
-                    st.error(
-                        f"🚨 **{len(reducidos)} producto(s) con stock modificado manualmente en WooCommerce** — "
-                        "el stock en WooCommerce es **menor** que el registrado en las OCs. "
-                        "Esto indica que alguien editó el stock directamente en el panel de WooCommerce.",
-                        icon="🚨",
+                    st.warning(
+                        f"⚠️ **{len(reducidos)} producto(s)** tienen el stock en WooCommerce por debajo "
+                        "del estimado del sistema (OCs − ventas importadas). "
+                        "**Causa más probable: ventas recientes en WooCommerce aún no importadas al sistema.** "
+                        "Importa las ventas para recalcular. Si el sistema ya está al día, "
+                        "puede indicar una reducción manual del stock en WooCommerce.",
+                        icon="⚠️",
                     )
                     rows_red = []
                     for p in reducidos:
                         pid = p.get("id")
-                        wc_stock = p.get("stock_quantity") or 0
-                        local_stock = stock_local.get(pid, 0)
+                        wc_stock   = p.get("stock_quantity") or 0
+                        local_stk  = stock_local.get(pid, 0)
+                        oc_ini     = oc_inicial.get(pid, 0)
+                        vendido    = vendido_local.get(pid, 0)
                         rows_red.append({
                             "ID": pid,
                             "Nombre": (p.get("name") or "")[:50],
                             "SKU": p.get("sku") or "—",
                             "Stock WooCommerce": wc_stock,
-                            "Stock en OCs (sistema)": local_stock,
-                            "Diferencia": wc_stock - local_stock,
+                            "Stock sistema (OC−ventas imp.)": local_stk,
+                            "Total vendido (importado)": vendido,
+                            "Diferencia": wc_stock - local_stk,
                         })
                     st.dataframe(
                         pd.DataFrame(rows_red),
@@ -1450,8 +1460,10 @@ def pagina_analisis():
                 )
                 st.warning(
                     f"⚠️ **{len(huerfanos)} producto(s)** tienen más stock en WooCommerce "
-                    f"que en las OCs registradas ({diff_total} unidades sin asignar). "
-                    "Crea una OC para regularizarlos.",
+                    f"que el registrado en el sistema ({diff_total} uds. por encima del estimado). "
+                    "Puede deberse a stock existente en WooCommerce antes de registrar la primera OC, "
+                    "a devoluciones procesadas en WooCommerce, o a stock agregado fuera del sistema. "
+                    "Si corresponde a una compra real, crea una OC para regularizarlo.",
                     icon="⚠️",
                 )
                 if st.button("📋 Crear OC para stock sin asignar",

@@ -8,6 +8,7 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime as _datetime
 from pathlib import Path
 
 try:
@@ -171,9 +172,10 @@ def init_db():
 # ── Órdenes de Compra ─────────────────────────────────────────────────────────
 
 def crear_orden_compra(proveedor: str, notas: str = "", iva_total: float = 0.0) -> int:
-    sql = "INSERT INTO ordenes_compra (proveedor, notas, iva_total) VALUES (?, ?, ?)"
+    fecha = _datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sql = "INSERT INTO ordenes_compra (proveedor, notas, iva_total, fecha_ingreso) VALUES (?, ?, ?, ?)"
     with _conn() as conn:
-        return _insert(conn, sql, (proveedor, notas, iva_total), "id_oc")
+        return _insert(conn, sql, (proveedor, notas, iva_total, fecha), "id_oc")
 
 
 def eliminar_orden_compra(id_oc: int):
@@ -334,9 +336,34 @@ def analisis_por_producto(desde_fecha: str = None, hasta_fecha: str = None) -> l
 
 
 def stock_local_por_producto() -> dict:
+    """Stock restante por producto = OC inicial - ventas importadas (FIFO)."""
     sql = """
         SELECT product_id, COALESCE(SUM(cantidad_actual), 0) AS total
         FROM lotes_inventario
+        GROUP BY product_id
+    """
+    with _conn() as conn:
+        rows = _rows(conn, sql)
+    return {row["product_id"]: int(row["total"]) for row in rows}
+
+
+def stock_oc_inicial_por_producto() -> dict:
+    """Total de unidades ingresadas al sistema mediante OCs (sin descontar ventas)."""
+    sql = """
+        SELECT product_id, COALESCE(SUM(cantidad_inicial), 0) AS total
+        FROM lotes_inventario
+        GROUP BY product_id
+    """
+    with _conn() as conn:
+        rows = _rows(conn, sql)
+    return {row["product_id"]: int(row["total"]) for row in rows}
+
+
+def ventas_totales_por_producto() -> dict:
+    """Total de unidades vendidas e importadas al sistema por producto."""
+    sql = """
+        SELECT product_id, COALESCE(SUM(cantidad_vendida), 0) AS total
+        FROM ventas_procesadas
         GROUP BY product_id
     """
     with _conn() as conn:
@@ -463,13 +490,14 @@ CATEGORIAS_GASTO = ["Salario", "Arriendo", "Servicios públicos", "Transporte", 
 
 def registrar_gasto(categoria: str, descripcion: str, monto: float,
                     fecha: str, recurrente: bool = False) -> int:
+    fecha_reg = _datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sql = """
-        INSERT INTO gastos_operativos (categoria, descripcion, monto, fecha, recurrente)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO gastos_operativos (categoria, descripcion, monto, fecha, recurrente, fecha_registro)
+        VALUES (?, ?, ?, ?, ?, ?)
     """
     with _conn() as conn:
         return _insert(conn, sql,
-                       (categoria, descripcion, monto, fecha, 1 if recurrente else 0),
+                       (categoria, descripcion, monto, fecha, 1 if recurrente else 0, fecha_reg),
                        "id_gasto")
 
 
