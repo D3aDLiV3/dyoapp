@@ -2349,8 +2349,8 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
                     rc = st.columns([5, 1.5, 2, 1.2, 0.45, 0.45, 0.45])
                     rc[0].markdown(
                         f"{ico} **{a['nombre']}** "
-                        f"<span style='color:#888;font-size:12px'>· {sub}</span>  \n"
-                        f"<span style='color:#aaa;font-size:11px'>{cap_label}</span>",
+                        f"<span style='color:#888;font-size:12px'>· {sub}</span> "
+                        f"<span style='color:#aaa;font-size:11px;margin-left:4px'>[{cap_label}]</span>",
                         unsafe_allow_html=True,
                     )
                     rc[1].markdown(f"${float(a['costo_adquisicion'] or 0):,.0f}")
