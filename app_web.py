@@ -48,19 +48,13 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* ── Sidebar: blanco, angosto, borde derecho sutil ──────────────── */
+    /* ── Sidebar ────────────────────────────────────────────────────── */
     section[data-testid="stSidebar"] {
         background: #ffffff !important;
         border-right: 1px solid #E5E7EB !important;
-        min-width: 200px !important;
-        max-width: 200px !important;
-        width: 200px !important;
     }
     section[data-testid="stSidebar"] > div:first-child {
-        min-width: 200px !important;
-        max-width: 200px !important;
-        width: 200px !important;
-        padding: 1rem 0.75rem !important;
+        overflow: hidden !important;
     }
 
     /* Todos los textos del sidebar: oscuro */
@@ -406,40 +400,84 @@ def _cargar_woo_cache() -> list[dict]:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    _logo_path = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
-    c1, c2, c3 = st.columns([1, 3, 1])
-    with c2:
-        st.image(str(_logo_path), use_container_width=True)
-    st.markdown(
-        "<p style='text-align:center; font-size:0.72rem; color:#9CA3AF; "
-        "margin-top:4px; margin-bottom:0; letter-spacing:0.06em; "
-        "text-transform:uppercase;'>WooAdmin</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("---")
+    _nav_mini = st.session_state.get("nav_mini", False)
+
+    # ── CSS dinámico según modo ────────────────────────────────────────
+    if _nav_mini:
+        st.markdown("""
+        <style>
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div:first-child {
+            min-width: 62px !important; max-width: 62px !important;
+            width: 62px !important; padding: 0.5rem 0.3rem !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stRadio"] label p {
+            width: 26px !important; overflow: hidden !important;
+            white-space: nowrap !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stRadio"] label {
+            padding: 9px 3px !important; justify-content: center !important;
+        }
+        .sb-full { display: none !important; }
+        </style>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <style>
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div:first-child {
+            min-width: 220px !important; max-width: 220px !important;
+            width: 220px !important;
+        }
+        section[data-testid="stSidebar"] > div:first-child {
+            padding: 1rem 0.75rem !important;
+        }
+        </style>""", unsafe_allow_html=True)
+
+    # ── Botón colapsar / expandir ─────────────────────────────────────
+    _toggle_icon = "\u25c4" if not _nav_mini else "\u25ba"
+    if st.button(_toggle_icon, key="btn_nav_mini", use_container_width=True,
+                 help="Colapsar / expandir menú"):
+        st.session_state.nav_mini = not _nav_mini
+        st.rerun()
+
+    if not _nav_mini:
+        _logo_path = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
+        _lc1, _lc2, _lc3 = st.columns([1, 3, 1])
+        with _lc2:
+            st.image(str(_logo_path), use_container_width=True)
+        st.markdown(
+            "<p class='sb-full' style='text-align:center; font-size:0.72rem; color:#9CA3AF;"
+            " margin-top:4px; margin-bottom:0; letter-spacing:0.06em;"
+            " text-transform:uppercase;'>WooAdmin</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("---")
+
     PAGINA = st.radio(
         "Módulo",
         options=[
-            "🏠 Inicio",
-            "📦 Orden de Compra",
-            "🛒 Importar Ventas",
-            "🏷️ Etiquetas",
-            "📊 Análisis",
-            "💰 Finanzas",
+            "\U0001f3e0  Panel",
+            "\U0001f4e5  Compras",
+            "\U0001f4e4  Ventas",
+            "\U0001f4ca  Inventario",
+            "\U0001f3f7  Etiquetas",
+            "\U0001f4c8  Finanzas",
         ],
         key="pagina_actual",
         label_visibility="collapsed",
     )
-    st.markdown("---")
-    st.caption("Gestión de Inventario FIFO\nDescuentos y Ofertas")
-    st.markdown("---")
-    st.caption(f"👤 {st.session_state.usuario_actual}")
-    st.caption(f"🕒 Sesión: {st.session_state._session_start}")
-    if st.button("🔒 Cerrar sesión", key="btn_logout", use_container_width=True):
-        _slog.info(f"LOGOUT | usuario={st.session_state.usuario_actual}")
-        st.session_state.autenticado   = False
-        st.session_state.usuario_actual = ""
-        st.rerun()
+
+    if not _nav_mini:
+        st.markdown("---")
+        st.caption("Gestión FIFO · Descuentos y Ofertas")
+        st.markdown("---")
+        st.caption(st.session_state.usuario_actual)
+        st.caption(st.session_state._session_start[:10])
+        if st.button("Cerrar sesión", key="btn_logout", use_container_width=True):
+            _slog.info(f"LOGOUT | usuario={st.session_state.usuario_actual}")
+            st.session_state.autenticado    = False
+            st.session_state.usuario_actual = ""
+            st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -579,7 +617,7 @@ def _oc_tab_nueva():
         notas = st.text_input("Notas", placeholder="Opcional", key="oc_notas")
 
     # ── Importar OC desde Excel ───────────────────────────────────────────────
-    with st.expander("📂 Cargar OC desde Excel"):
+    with st.expander("Cargar OC desde Excel"):
         st.caption(
             "Sube un Excel exportado desde esta pantalla. "
             "Columnas requeridas: **product_id, nombre, sku, cantidad, precio_compra**"
@@ -945,7 +983,7 @@ def pagina_oc():
 def pagina_ventas():
     st.title("🛒 Importar Ventas desde WooCommerce")
 
-    with st.expander("ℹ️ ¿Qué hace esta pestaña?", expanded=False):
+    with st.expander("¿Qué hace esta pestaña?", expanded=False):
         st.markdown("""
 **Esta pestaña aplica el método FIFO al historial de ventas de WooCommerce.**
 
@@ -1444,7 +1482,7 @@ def pagina_analisis():
                             if valor_venta > 0 else 0.0)
             unidades_tot = int(df_inv["Actual"].sum())
 
-            with st.expander("📊 Resumen de inventario", expanded=True):
+            with st.expander("Resumen de inventario", expanded=False):
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Unidades totales",        f"{unidades_tot:,}")
                 c2.metric("Valor a precio compra",   f"${valor_compra:,.2f}")
@@ -1512,7 +1550,7 @@ def pagina_analisis():
             tot_venta   = df_p["Valor Venta €"].sum()
             margen_gral = round((tot_venta - tot_compra) / tot_venta * 100, 1) if tot_venta > 0 else 0.0
 
-            with st.expander("📊 Resumen", expanded=True):
+            with st.expander("Resumen", expanded=False):
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Productos distintos",   len(df_p))
                 c2.metric("Unidades totales",       f"{tot_stock:,}")
@@ -1946,7 +1984,7 @@ def pagina_finanzas():
 
     st.title("💰 Finanzas")
 
-    tab_gastos, tab_patrimonio = st.tabs(["📋 Gastos Operativos", "🏦 Patrimonio"])
+    tab_gastos, tab_activos, tab_patrimonio = st.tabs(["📋 Gastos Operativos", "🏗️ Activos Fijos", "🏦 Patrimonio"])
 
     # ═══════════════════════════════════════════════════════════════════
     #  TAB 1: GASTOS OPERATIVOS
@@ -1976,7 +2014,7 @@ def pagina_finanzas():
         st.markdown("---")
 
         # ── Formulario nuevo gasto ──────────────────────────────────────
-        with st.expander("➕ Registrar gasto", expanded=False):
+        with st.expander("Registrar gasto", expanded=False):
             with st.form("form_nuevo_gasto", clear_on_submit=True):
                 fc1, fc2 = st.columns(2)
                 cat = fc1.selectbox("Categoría", db.CATEGORIAS_GASTO)
@@ -2023,7 +2061,7 @@ def pagina_finanzas():
             st.markdown(f"**Total del período: ${total_periodo:,.0f}**")
 
             # Eliminar gasto individual
-            with st.expander("🗑️ Eliminar gasto"):
+            with st.expander("Eliminar gasto"):
                 ids_disp = [r["id_gasto"] for r in gastos]
                 del_id = st.selectbox("ID del gasto a eliminar", ids_disp)
                 if st.button("Eliminar", type="secondary"):
@@ -2084,22 +2122,204 @@ def pagina_finanzas():
                 st.info("Sin datos para el período.")
 
     # ═══════════════════════════════════════════════════════════════════
-    #  TAB 2: PATRIMONIO
+    #  TAB 2: ACTIVOS FIJOS
+    # ═══════════════════════════════════════════════════════════════════
+    with tab_activos:
+        from datetime import date as _date_af
+
+        def _dep_activo(a, hoy=None):
+            """Calcula depreciación línea recta para un activo."""
+            if hoy is None:
+                hoy = _date_af.today()
+            fecha_adq = _date_af.fromisoformat(str(a["fecha_adquisicion"])[:10])
+            meses = max(0, (hoy.year - fecha_adq.year) * 12 + (hoy.month - fecha_adq.month))
+            costo    = float(a["costo_adquisicion"])
+            residual = float(a["valor_residual"] or 0)
+            vida_m   = int(a["vida_util_anios"]) * 12
+            dep_m    = (costo - residual) / vida_m if vida_m > 0 else 0
+            dep_acum = min(meses * dep_m, costo - residual)
+            return {
+                "dep_mensual":   dep_m,
+                "dep_acumulada": dep_acum,
+                "valor_libros":  costo - dep_acum,
+                "pct_dep":       (dep_acum / (costo - residual) * 100) if (costo - residual) > 0 else 100.0,
+                "meses_uso":     meses,
+            }
+
+        hoy_af = _date_af.today()
+        activos = db.listar_activos(solo_activos=False)
+        activos_en_uso = [a for a in activos if a["activo"]]
+
+        # ── KPIs ──────────────────────────────────────────────────────
+        total_costo    = sum(float(a["costo_adquisicion"]) for a in activos_en_uso)
+        total_libros   = sum(_dep_activo(a)["valor_libros"] for a in activos_en_uso)
+        dep_mes_total  = sum(_dep_activo(a)["dep_mensual"] for a in activos_en_uso)
+        total_dep_acum = total_costo - total_libros
+
+        ak1, ak2, ak3, ak4 = st.columns(4)
+        ak1.metric("Costo total activos",    f"${total_costo:,.0f}")
+        ak2.metric("Valor en libros",        f"${total_libros:,.0f}")
+        ak3.metric("Dep. acumulada",         f"${total_dep_acum:,.0f}")
+        ak4.metric("Dep. mensual (total)",   f"${dep_mes_total:,.0f}")
+
+        st.markdown("---")
+
+        # ── Formulario registrar activo ────────────────────────────────
+        with st.expander("Registrar activo fijo", expanded=False):
+            with st.form("form_nuevo_activo", clear_on_submit=True):
+                af1, af2 = st.columns(2)
+                nombre_a = af1.text_input("Nombre del activo",
+                                          placeholder="Ej: Moto Yamaha FZ 2024")
+                cat_a    = af2.selectbox("Categoría",
+                                         list(db.CATEGORIAS_ACTIVO.keys()))
+                af3, af4, af5 = st.columns(3)
+                costo_a    = af3.number_input("Costo adquisición ($)",
+                                              min_value=0.0, step=10000.0, format="%.0f")
+                residual_a = af4.number_input("Valor residual ($)",
+                                              min_value=0.0, step=1000.0, format="%.0f",
+                                              help="Valor estimado al final de su vida útil (puede ser 0)")
+                vida_a     = af5.number_input("Vida útil (años)",
+                                              min_value=1, max_value=50,
+                                              value=db.CATEGORIAS_ACTIVO[cat_a])
+                af6, af7 = st.columns(2)
+                fecha_a = af6.date_input("Fecha de adquisición", value=hoy_af)
+                notas_a = af7.text_input("Notas", placeholder="Opcional")
+
+                # Preview depreciación
+                if costo_a > 0 and vida_a > 0:
+                    _prev_dep_m = (costo_a - residual_a) / (vida_a * 12)
+                    st.caption(
+                        f"📉 Depreciación mensual estimada: **${_prev_dep_m:,.0f}**/mes  "
+                        f"→  **${_prev_dep_m * 12:,.0f}**/año  "
+                        f"(vida útil {vida_a} años)"
+                    )
+
+                if st.form_submit_button("Guardar activo", type="primary",
+                                         use_container_width=True):
+                    if not nombre_a.strip():
+                        st.error("Ingresa el nombre del activo.")
+                    elif costo_a <= 0:
+                        st.error("El costo debe ser mayor a 0.")
+                    elif residual_a >= costo_a:
+                        st.error("El valor residual no puede ser mayor o igual al costo.")
+                    else:
+                        db.registrar_activo(nombre_a.strip(), cat_a, costo_a, residual_a,
+                                            str(fecha_a), int(vida_a), notas_a.strip())
+                        st.success(f"Activo '{nombre_a}' registrado.")
+                        st.rerun()
+
+        # ── Tabla de activos ───────────────────────────────────────────
+        if activos:
+            st.markdown("#### Activos registrados")
+            _mostrar_bajas = st.checkbox("Mostrar activos dados de baja", value=False)
+            _lista_mostrar = activos if _mostrar_bajas else activos_en_uso
+
+            rows_a = []
+            for a in _lista_mostrar:
+                d = _dep_activo(a, hoy_af)
+                rows_a.append({
+                    "ID":             a["id_activo"],
+                    "Nombre":         a["nombre"],
+                    "Categoría":      a["categoria"],
+                    "Costo":          f"${float(a['costo_adquisicion']):,.0f}",
+                    "Valor libros":   f"${d['valor_libros']:,.0f}",
+                    "Dep./mes":       f"${d['dep_mensual']:,.0f}",
+                    "% Depreciado":   f"{d['pct_dep']:.1f}%",
+                    "Meses uso":      d["meses_uso"],
+                    "Vida útil":      f"{a['vida_util_anios']}a",
+                    "Estado":         "✅ En uso" if a["activo"] else "⛔ Baja",
+                })
+            st.dataframe(pd.DataFrame(rows_a), use_container_width=True, hide_index=True)
+
+            # Barras de depreciación visual
+            if activos_en_uso:
+                st.markdown("#### Estado de depreciación")
+                for a in activos_en_uso:
+                    d = _dep_activo(a, hoy_af)
+                    pct = min(d["pct_dep"], 100.0)
+                    color = "#10B981" if pct < 50 else ("#F59E0B" if pct < 80 else "#D42B2B")
+                    st.markdown(
+                        f"**{a['nombre']}** ({a['categoria']})  "
+                        f"— Valor libros: **${d['valor_libros']:,.0f}** "
+                        f"| Dep./mes: ${d['dep_mensual']:,.0f}"
+                    )
+                    _meses_rest = int(a["vida_util_anios"]) * 12 - d["meses_uso"]
+                    _txt_rest   = "Vida útil cumplida" if pct >= 100 else f"{_meses_rest} meses restantes"
+                    st.progress(int(pct) / 100,
+                                text=f"{pct:.1f}% depreciado ({_txt_rest})")
+
+            # Dar de baja / eliminar
+            st.markdown("")
+            with st.expander("Gestionar activo"):
+                gc1, gc2 = st.columns(2)
+                ids_activos = [a["id_activo"] for a in activos_en_uso]
+                ids_todos   = [a["id_activo"] for a in activos]
+                _nombres_map = {a["id_activo"]: a["nombre"] for a in activos}
+
+                with gc1:
+                    if ids_activos:
+                        baja_id = st.selectbox(
+                            "Dar de baja (activo en uso)",
+                            ids_activos,
+                            format_func=lambda x: f"#{x} — {_nombres_map[x]}",
+                            key="af_baja_id"
+                        )
+                        if st.button("⛔ Dar de baja", key="btn_baja_activo"):
+                            db.dar_baja_activo(baja_id)
+                            st.success(f"Activo #{baja_id} marcado como baja.")
+                            st.rerun()
+                    else:
+                        st.info("No hay activos en uso.")
+                with gc2:
+                    if ids_todos:
+                        del_id_a = st.selectbox(
+                            "Eliminar definitivamente",
+                            ids_todos,
+                            format_func=lambda x: f"#{x} — {_nombres_map[x]}",
+                            key="af_del_id"
+                        )
+                        if st.button("🗑️ Eliminar activo", key="btn_del_activo",
+                                     type="secondary"):
+                            db.eliminar_activo(del_id_a)
+                            st.success(f"Activo #{del_id_a} eliminado.")
+                            st.rerun()
+        else:
+            st.info("Sin activos fijos registrados aún.")
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  TAB 3: PATRIMONIO
     # ═══════════════════════════════════════════════════════════════════
     with tab_patrimonio:
-        resumen = db.resumen_home()
+        from datetime import date as _date_patr
+
+        def _dep_activo_p(a, hoy=None):
+            if hoy is None:
+                hoy = _date_patr.today()
+            fecha_adq = _date_patr.fromisoformat(str(a["fecha_adquisicion"])[:10])
+            meses = max(0, (hoy.year - fecha_adq.year) * 12 + (hoy.month - fecha_adq.month))
+            costo    = float(a["costo_adquisicion"])
+            residual = float(a["valor_residual"] or 0)
+            vida_m   = int(a["vida_util_anios"]) * 12
+            dep_m    = (costo - residual) / vida_m if vida_m > 0 else 0
+            dep_acum = min(meses * dep_m, costo - residual)
+            return costo - dep_acum
+
+        resumen    = db.resumen_home()
         patri_rows = db.patrimonio_inventario()
+        activos_p  = db.listar_activos(solo_activos=True)
 
         valor_inv      = resumen["valor_stock"]
         utilidad_acum  = resumen["utilidad_total"]
         gastos_acum    = sum(float(r["total_gastos"]) for r in db.gastos_por_mes())
-        patrimonio_net = valor_inv + utilidad_acum - gastos_acum
+        valor_activos  = sum(_dep_activo_p(a) for a in activos_p)
+        patrimonio_net = valor_inv + utilidad_acum - gastos_acum + valor_activos
 
-        pk1, pk2, pk3, pk4 = st.columns(4)
-        pk1.metric("Inventario (costo)",  f"${valor_inv:,.0f}")
+        pk1, pk2, pk3, pk4, pk5 = st.columns(5)
+        pk1.metric("Inventario (costo)",   f"${valor_inv:,.0f}")
         pk2.metric("Utilidad bruta acum.", f"${utilidad_acum:,.0f}")
         pk3.metric("Gastos acumulados",    f"${gastos_acum:,.0f}")
-        pk4.metric("Patrimonio neto",      f"${patrimonio_net:,.0f}")
+        pk4.metric("Activos fijos (libros)", f"${valor_activos:,.0f}")
+        pk5.metric("Patrimonio neto",      f"${patrimonio_net:,.0f}")
 
         st.markdown("")
 
@@ -2124,8 +2344,13 @@ def pagina_finanzas():
         with pcol2:
             st.markdown("#### Composición")
             comp_data = {
-                "Componente": ["Inventario", "Utilidad bruta", "Gastos"],
-                "Valor":      [max(valor_inv, 0), max(utilidad_acum, 0), max(gastos_acum, 0)],
+                "Componente": ["Inventario", "Utilidad bruta", "Activos fijos", "Gastos"],
+                "Valor":      [
+                    max(valor_inv, 0),
+                    max(utilidad_acum, 0),
+                    max(valor_activos, 0),
+                    max(gastos_acum, 0),
+                ],
             }
             if any(v > 0 for v in comp_data["Valor"]):
                 df_comp = pd.DataFrame(comp_data)
@@ -2135,6 +2360,7 @@ def pagina_finanzas():
                     color_discrete_map={
                         "Inventario":    "#3A5BA0",
                         "Utilidad bruta": "#10B981",
+                        "Activos fijos": "#8B5CF6",
                         "Gastos":        "#D42B2B",
                     },
                     height=280,
@@ -2156,15 +2382,15 @@ def pagina_finanzas():
 # ═════════════════════════════════════════════════════════════════════════════
 #  ROUTER
 # ═════════════════════════════════════════════════════════════════════════════
-if PAGINA == "🏠 Inicio":
+if PAGINA == "\U0001f3e0  Panel":
     pagina_inicio()
-elif PAGINA == "📦 Orden de Compra":
+elif PAGINA == "\U0001f4e5  Compras":
     pagina_oc()
-elif PAGINA == "🛒 Importar Ventas":
+elif PAGINA == "\U0001f4e4  Ventas":
     pagina_ventas()
-elif PAGINA == "🏷️ Etiquetas":
-    pagina_etiquetas()
-elif PAGINA == "📊 Análisis":
+elif PAGINA == "\U0001f4ca  Inventario":
     pagina_analisis()
-elif PAGINA == "💰 Finanzas":
+elif PAGINA == "\U0001f3f7  Etiquetas":
+    pagina_etiquetas()
+elif PAGINA == "\U0001f4c8  Finanzas":
     pagina_finanzas()
