@@ -5,6 +5,7 @@ Comando de arranque: streamlit run app_web.py --server.port 8501
 """
 import os
 import json
+import logging
 import hashlib
 import secrets
 import tempfile
@@ -16,6 +17,15 @@ from datetime import date as dt_date, datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+# ── Logger de sesiones ──────────────────────────────────────────────────────────
+_LOG_PATH = Path(__file__).parent / "sessions.log"
+_slog = logging.getLogger("dyo_sessions")
+if not _slog.handlers:
+    _sh = logging.FileHandler(str(_LOG_PATH), encoding="utf-8")
+    _sh.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    _slog.addHandler(_sh)
+    _slog.setLevel(logging.INFO)
 
 warnings.filterwarnings("ignore")
 
@@ -203,10 +213,14 @@ _DEFAULTS = {
     "autenticado":        False,
     "usuario_actual":     "",
     "pagina_actual":      "🏠 Inicio",
+    "_session_start":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+if _es_sesion_nueva:
+    _slog.info("NUEVA_SESION | WebSocket nuevo (session_state vacío)")
 
 # ── Autenticación ─────────────────────────────────────────────────────────────
 
@@ -260,10 +274,12 @@ def _pagina_login():
                     "Ejecuta `setup_usuario.py` en el servidor y reinicia la app."
                 )
             elif _usr in _usuarios and _verificar_password(_pwd, _usuarios[_usr]["hash"]):
+                _slog.info(f"LOGIN | usuario={_usr}")
                 st.session_state.autenticado    = True
                 st.session_state.usuario_actual = _usr
                 st.rerun()
             else:
+                _slog.info(f"LOGIN_FALLIDO | usuario={_usr}")
                 st.error("Usuario o contraseña incorrectos.")
 
 
@@ -335,7 +351,9 @@ with st.sidebar:
     st.caption("Gestión de Inventario FIFO\nDescuentos y Ofertas")
     st.markdown("---")
     st.caption(f"👤 {st.session_state.usuario_actual}")
+    st.caption(f"🕒 Sesión: {st.session_state._session_start}")
     if st.button("🔒 Cerrar sesión", key="btn_logout", use_container_width=True):
+        _slog.info(f"LOGOUT | usuario={st.session_state.usuario_actual}")
         st.session_state.autenticado   = False
         st.session_state.usuario_actual = ""
         st.rerun()

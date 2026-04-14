@@ -8,7 +8,7 @@ module.exports = {
       cwd: "/opt/wooposadmin",
       autorestart: true,
       watch: false,
-      max_memory_restart: "300M",
+      max_memory_restart: "700M",
       env: {
         STREAMLIT_SERVER_HEADLESS: "true",
         STREAMLIT_SERVER_PORT: "8501",
