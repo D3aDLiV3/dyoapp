@@ -5,19 +5,17 @@ Comando de arranque: streamlit run app_web.py --server.port 8501
 """
 import os
 import json
-import hmac as _hmac
 import hashlib
 import secrets
 import tempfile
 import warnings
 from io import BytesIO
 from pathlib import Path
-from datetime import date as dt_date, datetime, timedelta
+from datetime import date as dt_date, datetime
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import extra_streamlit_components as stx
 
 warnings.filterwarnings("ignore")
 
@@ -29,43 +27,6 @@ import etiquetas as etiq_mod
 # ── Cargar configuración ────────────────────────────────────────────────────────
 _CONFIG_PATH = Path(__file__).parent / "config.json"
 _CONFIG: dict = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) if _CONFIG_PATH.exists() else {}
-
-# ── Cookie de sesión ──────────────────────────────────────────────────────────
-_COOKIE_NAME = "dyo_session"
-_COOKIE_DAYS = 30
-
-# Auto-genera cookie_secret la primera vez y lo guarda en config.json
-if "cookie_secret" not in _CONFIG or not _CONFIG["cookie_secret"]:
-    _CONFIG["cookie_secret"] = secrets.token_hex(32)
-    _CONFIG_PATH.write_text(
-        json.dumps(_CONFIG, indent=4, ensure_ascii=False), encoding="utf-8"
-    )
-
-def _crear_token_cookie(username: str) -> str:
-    expiry = int(datetime.now().timestamp()) + _COOKIE_DAYS * 86400
-    payload = f"{username}|{expiry}"
-    sig = _hmac.new(
-        _CONFIG["cookie_secret"].encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
-    return f"{payload}|{sig}"
-
-def _validar_token_cookie(token: str) -> "str | None":
-    try:
-        parts = token.split("|")
-        if len(parts) != 3:
-            return None
-        username, expiry_str, sig = parts
-        if int(expiry_str) < int(datetime.now().timestamp()):
-            return None
-        payload = f"{username}|{expiry_str}"
-        expected = _hmac.new(
-            _CONFIG["cookie_secret"].encode(), payload.encode(), hashlib.sha256
-        ).hexdigest()
-        if not _hmac.compare_digest(sig, expected):
-            return None
-        return username if username in _CONFIG.get("usuarios", {}) else None
-    except Exception:
-        return None
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
@@ -301,29 +262,10 @@ def _pagina_login():
             elif _usr in _usuarios and _verificar_password(_pwd, _usuarios[_usr]["hash"]):
                 st.session_state.autenticado    = True
                 st.session_state.usuario_actual = _usr
-                _cookie_mgr.set(
-                    _COOKIE_NAME,
-                    _crear_token_cookie(_usr),
-                    expires_at=datetime.now() + timedelta(days=_COOKIE_DAYS),
-                    key="_set_login_cookie",
-                )
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
 
-
-# ── Cookie Manager (singleton por sesión) ────────────────────────────────────
-_cookie_mgr = stx.CookieManager()
-
-# Restaurar sesión desde cookie si el WebSocket reconectó
-if not st.session_state.autenticado:
-    _tok_cookie = _cookie_mgr.get(_COOKIE_NAME)
-    if _tok_cookie:
-        _restored = _validar_token_cookie(_tok_cookie)
-        if _restored:
-            st.session_state.autenticado    = True
-            st.session_state.usuario_actual = _restored
-            st.rerun()
 
 if not st.session_state.autenticado:
     _pagina_login()
@@ -394,7 +336,6 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"👤 {st.session_state.usuario_actual}")
     if st.button("🔒 Cerrar sesión", key="btn_logout", use_container_width=True):
-        _cookie_mgr.delete(_COOKIE_NAME, key="_del_session_cookie")
         st.session_state.autenticado   = False
         st.session_state.usuario_actual = ""
         st.rerun()
