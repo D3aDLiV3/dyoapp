@@ -826,11 +826,15 @@ def _oc_tab_historial():
         st.info("No hay OCs registradas aún.")
         return
 
-    # Mapa product_id → precio de venta WooCommerce (para % utilidad)
+    # Mapa product_id → precio y nombre desde WooCommerce (para % utilidad y fallback nombre)
+    _wc_cache = _cargar_woo_cache()
     _wc_precio = {
         p["id"]: float(p.get("price") or 0)
-        for p in _cargar_woo_cache()
-        if p.get("id")
+        for p in _wc_cache if p.get("id")
+    }
+    _wc_nombre = {
+        p["id"]: p.get("name", "")
+        for p in _wc_cache if p.get("id")
     }
 
     for oc in ocs:
@@ -858,7 +862,7 @@ def _oc_tab_historial():
             rows = []
             for l in lotes:
                 vendidas     = l["cantidad_inicial"] - l["cantidad_actual"]
-                nombre_disp  = l.get("nombre") or l["sku"] or str(l["product_id"])
+                nombre_disp  = l.get("nombre") or _wc_nombre.get(l["product_id"], "") or l["sku"] or str(l["product_id"])
                 precio_base  = float(l["precio_compra_unitario"])
                 costo_adic_u = float(l.get("costo_adicional_unitario") or 0)
                 costo_real   = precio_base + costo_adic_u
