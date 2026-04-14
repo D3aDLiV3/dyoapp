@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS lotes_inventario (
     id_oc INTEGER,
     product_id INTEGER, -- ID de WooCommerce
     sku TEXT,
+    nombre TEXT,
     cantidad_inicial INTEGER,
     cantidad_actual INTEGER, -- Aquí se descuenta según se vende
     precio_compra_unitario DECIMAL(10, 2),

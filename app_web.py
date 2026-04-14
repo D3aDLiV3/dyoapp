@@ -725,7 +725,7 @@ def _oc_tab_nueva():
                 for item in st.session_state.oc_items:
                     db.crear_lote(id_oc, item["product_id"],
                                   item["sku"], item["cantidad"],
-                                  item["precio_compra"])
+                                  item["precio_compra"], item.get("nombre", ""))
                     woo_api.incrementar_stock(item["product_id"],
                                               item["cantidad"])
                 n = len(st.session_state.oc_items)
@@ -778,8 +778,10 @@ def _oc_tab_historial():
             rows = []
             for l in lotes:
                 vendidas = l["cantidad_inicial"] - l["cantidad_actual"]
+                nombre_disp = l.get("nombre") or l["sku"] or str(l["product_id"])
                 rows.append({
-                    "SKU":           l["sku"],
+                    "Nombre":        nombre_disp,
+                    "SKU":           l["sku"] or "—",
                     "Ingresadas":    l["cantidad_inicial"],
                     "Vendidas":      vendidas,
                     "En stock":      l["cantidad_actual"],
@@ -1268,6 +1270,7 @@ def _dialogo_oc_woo():
                             "" if row["SKU"] == "—" else str(row["SKU"]),
                             cant,
                             float(row["P. Compra"]),
+                            str(row.get("Nombre", "")),
                         )
                         guardados += 1
                     st.success(f"✅ OC #{id_oc} creada — {guardados} productos regularizados.")

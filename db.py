@@ -167,6 +167,9 @@ def init_db():
             cols = [r[1] for r in conn.execute("PRAGMA table_info(ordenes_compra)").fetchall()]
             if "iva_total" not in cols:
                 conn.execute("ALTER TABLE ordenes_compra ADD COLUMN iva_total DECIMAL(12,2) DEFAULT 0")
+            cols_lotes = [r[1] for r in conn.execute("PRAGMA table_info(lotes_inventario)").fetchall()]
+            if "nombre" not in cols_lotes:
+                conn.execute("ALTER TABLE lotes_inventario ADD COLUMN nombre TEXT DEFAULT ''")
 
 
 # ── Órdenes de Compra ─────────────────────────────────────────────────────────
@@ -193,14 +196,14 @@ def listar_ordenes_compra() -> list:
 # ── Lotes de Inventario (FIFO) ────────────────────────────────────────────────
 
 def crear_lote(id_oc: int, product_id: int, sku: str,
-               cantidad: int, precio_compra: float) -> int:
+               cantidad: int, precio_compra: float, nombre: str = "") -> int:
     sql = """
         INSERT INTO lotes_inventario
-            (id_oc, product_id, sku, cantidad_inicial, cantidad_actual, precio_compra_unitario)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (id_oc, product_id, sku, nombre, cantidad_inicial, cantidad_actual, precio_compra_unitario)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """
     with _conn() as conn:
-        return _insert(conn, sql, (id_oc, product_id, sku, cantidad, cantidad, precio_compra), "id_lote")
+        return _insert(conn, sql, (id_oc, product_id, sku, nombre, cantidad, cantidad, precio_compra), "id_lote")
 
 
 def listar_lotes_por_producto(product_id: int) -> list:
@@ -215,7 +218,7 @@ def listar_lotes_por_producto(product_id: int) -> list:
 
 def listar_lotes_por_oc(id_oc: int) -> list:
     sql = """
-        SELECT product_id, sku, cantidad_inicial, cantidad_actual, precio_compra_unitario
+        SELECT product_id, sku, nombre, cantidad_inicial, cantidad_actual, precio_compra_unitario
         FROM lotes_inventario
         WHERE id_oc = ?
         ORDER BY id_lote ASC
