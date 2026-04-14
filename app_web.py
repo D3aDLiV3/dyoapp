@@ -9,11 +9,13 @@ import logging
 import hashlib
 import secrets
 import tempfile
+import time as _time
 import warnings
 from io import BytesIO
 from pathlib import Path
 from datetime import date as dt_date, datetime
 
+import requests as _req
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -35,12 +37,86 @@ import fifo
 import etiquetas as etiq_mod
 
 # ── Cargar configuración ────────────────────────────────────────────────────────
-_CONFIG_PATH = Path(__file__).parent / "config.json"
-_CONFIG: dict = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) if _CONFIG_PATH.exists() else {}
+CONFIG_PATH = Path(__file__).parent / "config.json"
+_CONFIG: dict = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+
+# ── Identidad del sitio (WordPress REST API, caché en disco 24 h) ─────────────
+_IDENTITY_CACHE = Path(__file__).parent / "_site_identity.json"
+_LOGO_CACHE     = Path(__file__).parent / "_site_logo_cache.png"
+_LOCAL_LOGO     = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
+
+def _cargar_identidad_sitio() -> dict:
+    """Devuelve {name, description, logo_path} desde WordPress. Caché 24 h en disco."""
+    in_cache = False
+    if _IDENTITY_CACHE.exists():
+        try:
+            cached = json.loads(_IDENTITY_CACHE.read_text(encoding="utf-8"))
+            if _time.time() - cached.get("_ts", 0) < 86400:
+                if not Path(cached.get("logo_path", "")).exists():
+                    cached["logo_path"] = str(_LOCAL_LOGO)
+                in_cache = True
+                return cached
+        except Exception:
+            pass
+
+    url_base = _CONFIG.get("url_sitio", "").rstrip("/")
+    result = {
+        "name":        "WooAdmin",
+        "description": "",
+        "logo_path":   str(_LOCAL_LOGO),
+    }
+
+    if not url_base or in_cache:
+        return result
+
+    try:
+        # 1. Nombre y descripción del sitio (sin autenticación)
+        r = _req.get(f"{url_base}/wp-json/", timeout=5, verify=False)
+        if r.ok:
+            d = r.json()
+            result["name"]        = d.get("name") or result["name"]
+            result["description"] = d.get("description", "")
+
+        # 2. Logo del sitio (credenciales WooCommerce via Basic Auth)
+        ck = _CONFIG.get("consumer_key", "")
+        cs = _CONFIG.get("consumer_secret", "")
+        logo_url = ""
+        if ck and cs:
+            r2 = _req.get(f"{url_base}/wp-json/wp/v2/settings",
+                          auth=(ck, cs), timeout=5, verify=False)
+            if r2.ok:
+                sd = r2.json()
+                logo_id       = sd.get("site_logo")
+                site_icon_url = sd.get("site_icon_url", "")
+                if logo_id:
+                    r3 = _req.get(f"{url_base}/wp-json/wp/v2/media/{logo_id}",
+                                  timeout=5, verify=False)
+                    if r3.ok:
+                        logo_url = r3.json().get("source_url", "")
+                if not logo_url:
+                    logo_url = site_icon_url
+
+        # 3. Descargar logo y guardar en disco
+        if logo_url:
+            r4 = _req.get(logo_url, timeout=10, verify=False)
+            if r4.ok and "image" in r4.headers.get("content-type", ""):
+                _LOGO_CACHE.write_bytes(r4.content)
+                result["logo_path"] = str(_LOGO_CACHE)
+    except Exception:
+        pass
+
+    result["_ts"] = _time.time()
+    try:
+        _IDENTITY_CACHE.write_text(json.dumps(result), encoding="utf-8")
+    except Exception:
+        pass
+    return result
+
+_SITE = _cargar_identidad_sitio()
 
 # ── Configuración de página ───────────────────────────────────────────────────
 st.set_page_config(
-    page_title="DYO WooAdmin",
+    page_title=_SITE["name"],
     page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -321,17 +397,18 @@ def _pagina_login():
     )
     _, col, _ = st.columns([1, 1.4, 1])
     with col:
-        _logo_p = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
+        _logo_p = Path(_SITE["logo_path"])
         if _logo_p.exists():
             lc1, lc2, lc3 = st.columns([1, 1, 1])
             with lc2:
                 st.image(str(_logo_p), width=80)
+        _site_desc = _SITE.get("description", "")
         st.markdown(
-            """
+            f"""
             <div style="text-align:center;margin:0.75rem 0 1.75rem;">
-                <div style="font-size:1.4rem;font-weight:700;color:#1C2333;">WooAdmin</div>
+                <div style="font-size:1.4rem;font-weight:700;color:#1C2333;">{_SITE['name']}</div>
                 <div style="font-size:0.82rem;color:#9CA3AF;letter-spacing:0.04em;"
-                >DESCUENTOS Y OFERTAS</div>
+                >{_site_desc}</div>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -441,14 +518,15 @@ with st.sidebar:
         st.rerun()
 
     if not _nav_mini:
-        _logo_path = Path(__file__).parent / "Logo Descuentos y ofertas" / "Logo.png"
+        _logo_path = Path(_SITE["logo_path"])
         _lc1, _lc2, _lc3 = st.columns([1, 3, 1])
         with _lc2:
-            st.image(str(_logo_path), use_container_width=True)
+            if _logo_path.exists():
+                st.image(str(_logo_path), use_container_width=True)
         st.markdown(
             "<p class='sb-full' style='text-align:center; font-size:0.72rem; color:#9CA3AF;"
             " margin-top:4px; margin-bottom:0; letter-spacing:0.06em;"
-            " text-transform:uppercase;'>WooAdmin</p>",
+            f" text-transform:uppercase;'>{_SITE['name']}</p>",
             unsafe_allow_html=True,
         )
         st.markdown("---")
@@ -469,7 +547,7 @@ with st.sidebar:
 
     if not _nav_mini:
         st.markdown("---")
-        st.caption("Gestión FIFO · Descuentos y Ofertas")
+        st.caption(f"{_SITE['name']} · Admin")
         st.markdown("---")
         st.caption(st.session_state.usuario_actual)
         st.caption(st.session_state._session_start[:10])
