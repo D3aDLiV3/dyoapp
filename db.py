@@ -1,5 +1,5 @@
 """
-db.py — Capa de acceso a datos.
+nedb.py — Capa de acceso a datos.
 
 Soporta SQLite (local/offline) y PostgreSQL (cloud centralizado).
 Si config.json contiene 'database_url', usa PostgreSQL; si no, SQLite local.
@@ -153,32 +153,58 @@ def init_db():
             for stmt in _SCHEMA_PG:
                 with conn.cursor() as cur:
                     cur.execute(stmt)
-            # Migración: agregar iva_total si no existe
+            # Migración: agregar columnas faltantes
             with conn.cursor() as cur:
                 cur.execute("""
                     ALTER TABLE ordenes_compra
                     ADD COLUMN IF NOT EXISTS iva_total DECIMAL(12,2) DEFAULT 0
                 """)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE ordenes_compra
+                    ADD COLUMN IF NOT EXISTS costos_adicionales DECIMAL(12,2) DEFAULT 0
+                """)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE ordenes_compra
+                    ADD COLUMN IF NOT EXISTS desc_costos_adicionales TEXT DEFAULT ''
+                """)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE lotes_inventario
+                    ADD COLUMN IF NOT EXISTS costo_adicional_unitario DECIMAL(10,2) DEFAULT 0
+                """)
     else:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
         with _conn() as conn:
             conn.executescript(schema)
-            # Migración: agregar iva_total si no existe
+            # Migración: agregar columnas faltantes
             cols = [r[1] for r in conn.execute("PRAGMA table_info(ordenes_compra)").fetchall()]
             if "iva_total" not in cols:
                 conn.execute("ALTER TABLE ordenes_compra ADD COLUMN iva_total DECIMAL(12,2) DEFAULT 0")
+            if "costos_adicionales" not in cols:
+                conn.execute("ALTER TABLE ordenes_compra ADD COLUMN costos_adicionales DECIMAL(12,2) DEFAULT 0")
+            if "desc_costos_adicionales" not in cols:
+                conn.execute("ALTER TABLE ordenes_compra ADD COLUMN desc_costos_adicionales TEXT DEFAULT ''")
             cols_lotes = [r[1] for r in conn.execute("PRAGMA table_info(lotes_inventario)").fetchall()]
             if "nombre" not in cols_lotes:
                 conn.execute("ALTER TABLE lotes_inventario ADD COLUMN nombre TEXT DEFAULT ''")
+            if "costo_adicional_unitario" not in cols_lotes:
+                conn.execute("ALTER TABLE lotes_inventario ADD COLUMN costo_adicional_unitario DECIMAL(10,2) DEFAULT 0")
 
 
 # ── Órdenes de Compra ─────────────────────────────────────────────────────────
 
-def crear_orden_compra(proveedor: str, notas: str = "", iva_total: float = 0.0) -> int:
+def crear_orden_compra(proveedor: str, notas: str = "", iva_total: float = 0.0,
+                       costos_adicionales: float = 0.0, desc_costos_adicionales: str = "") -> int:
     fecha = _datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    sql = "INSERT INTO ordenes_compra (proveedor, notas, iva_total, fecha_ingreso) VALUES (?, ?, ?, ?)"
+    sql = """
+        INSERT INTO ordenes_compra
+            (proveedor, notas, iva_total, costos_adicionales, desc_costos_adicionales, fecha_ingreso)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """
     with _conn() as conn:
-        return _insert(conn, sql, (proveedor, notas, iva_total, fecha), "id_oc")
+        return _insert(conn, sql, (proveedor, notas, iva_total, costos_adicionales, desc_costos_adicionales, fecha), "id_oc")
 
 
 def eliminar_orden_compra(id_oc: int):
@@ -196,14 +222,19 @@ def listar_ordenes_compra() -> list:
 # ── Lotes de Inventario (FIFO) ────────────────────────────────────────────────
 
 def crear_lote(id_oc: int, product_id: int, sku: str,
-               cantidad: int, precio_compra: float, nombre: str = "") -> int:
+               cantidad: int, precio_compra: float, nombre: str = "",
+               costo_adicional_unitario: float = 0.0) -> int:
     sql = """
         INSERT INTO lotes_inventario
-            (id_oc, product_id, sku, nombre, cantidad_inicial, cantidad_actual, precio_compra_unitario)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id_oc, product_id, sku, nombre, cantidad_inicial, cantidad_actual,
+             precio_compra_unitario, costo_adicional_unitario)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
     with _conn() as conn:
-        return _insert(conn, sql, (id_oc, product_id, sku, nombre, cantidad, cantidad, precio_compra), "id_lote")
+        return _insert(conn, sql,
+                       (id_oc, product_id, sku, nombre, cantidad, cantidad,
+                        precio_compra, costo_adicional_unitario),
+                       "id_lote")
 
 
 def listar_lotes_por_producto(product_id: int) -> list:
@@ -218,7 +249,8 @@ def listar_lotes_por_producto(product_id: int) -> list:
 
 def listar_lotes_por_oc(id_oc: int) -> list:
     sql = """
-        SELECT product_id, sku, nombre, cantidad_inicial, cantidad_actual, precio_compra_unitario
+        SELECT product_id, sku, nombre, cantidad_inicial, cantidad_actual,
+               precio_compra_unitario, costo_adicional_unitario
         FROM lotes_inventario
         WHERE id_oc = ?
         ORDER BY id_lote ASC

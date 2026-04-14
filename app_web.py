@@ -226,18 +226,26 @@ def _validate_session_token(token: str) -> str:
 def _guardar_borrador_oc(usuario: str, items: list):
     path = Path(__file__).parent / f"_oc_draft_{usuario}.json"
     try:
-        path.write_text(json.dumps(items), encoding="utf-8")
+        data = {
+            "items": items,
+            "costos_adicionales":  st.session_state.get("oc_costos_adicionales", 0.0),
+            "desc_costos_adicionales": st.session_state.get("oc_desc_costos_adicionales", ""),
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
     except Exception:
         pass
 
-def _cargar_borrador_oc(usuario: str) -> list:
+def _cargar_borrador_oc(usuario: str) -> dict:
     path = Path(__file__).parent / f"_oc_draft_{usuario}.json"
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, list):  # formato antiguo: sólo lista de items
+                return {"items": data, "costos_adicionales": 0.0, "desc_costos_adicionales": ""}
+            return data
         except Exception:
             pass
-    return []
+    return {"items": [], "costos_adicionales": 0.0, "desc_costos_adicionales": ""}
 
 def _limpiar_borrador_oc(usuario: str):
     path = Path(__file__).parent / f"_oc_draft_{usuario}.json"
@@ -258,16 +266,20 @@ if _es_sesion_nueva:
             st.session_state.autenticado    = True
             st.session_state.usuario_actual = _pre_u
             _draft_pre = _cargar_borrador_oc(_pre_u)
-            if _draft_pre:
-                st.session_state.oc_items = _draft_pre
+            if _draft_pre["items"]:
+                st.session_state.oc_items = _draft_pre["items"]
+                st.session_state.oc_costos_adicionales     = _draft_pre.get("costos_adicionales", 0.0)
+                st.session_state.oc_desc_costos_adicionales = _draft_pre.get("desc_costos_adicionales", "")
             _slog.info(f"SESSION_RESTORED | usuario={_pre_u}")
 
 _DEFAULTS = {
-    "oc_items":           [],
-    "oc_producto_actual": None,
-    "oc_guardando":       False,
-    "oc_iva_incluido":    False,
-    "_oc_sel_ver":        0,
+    "oc_items":                    [],
+    "oc_producto_actual":          None,
+    "oc_guardando":                False,
+    "oc_iva_incluido":             False,
+    "_oc_sel_ver":                 0,
+    "oc_costos_adicionales":       0.0,
+    "oc_desc_costos_adicionales":  "",
     "et_items":           [],
     "et_producto_actual": None,
     "et_oc_items":        None,
@@ -697,9 +709,44 @@ def _oc_tab_nueva():
         st.markdown("")
         total     = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
         total_iva = sum(i["cantidad"] * i.get("iva_unitario", 0) for i in st.session_state.oc_items)
-        mc1, mc2 = st.columns(2)
+
+        # ── Costos adicionales (flete, transporte, etc.) ──────────────────────
+        st.markdown("---")
+        st.markdown("##### Costos adicionales de la OC")
+        st.caption("Se distribuyen proporcionalmente entre los ítems según su valor relativo.")
+        _ca1, _ca2 = st.columns([1, 2])
+        with _ca1:
+            st.number_input(
+                "Monto ($)",
+                min_value=0.0, step=1000.0, format="%.2f",
+                key="oc_costos_adicionales",
+                help="Ej: flete, transporte, aduanas. Proporcional al valor de cada ítem.",
+            )
+        with _ca2:
+            st.text_input(
+                "Descripción",
+                placeholder="Ej: Flete Bogotá - Medellín",
+                key="oc_desc_costos_adicionales",
+            )
+        _ca_total = st.session_state.get("oc_costos_adicionales", 0.0)
+        if _ca_total > 0 and st.session_state.oc_items:
+            _base_total = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
+            if _base_total > 0:
+                with st.expander("Ver distribución por ítem", expanded=False):
+                    for _it in st.session_state.oc_items:
+                        _prop = (_it["cantidad"] * _it["precio_compra"]) / _base_total
+                        _adic_u = round(_prop * _ca_total / _it["cantidad"], 2)
+                        st.caption(
+                            f"• **{_it['nombre'] or _it['sku']}** — "
+                            f"+${_adic_u:,.2f}/ud  "
+                            f"(costo real: ${_it['precio_compra'] + _adic_u:,.2f}/ud)"
+                        )
+
+        st.markdown("")
+        mc1, mc2, mc3 = st.columns(3)
         mc1.metric("Total OC (con IVA)", f"${total:,.2f}")
         mc2.metric("IVA total de la OC",  f"${total_iva:,.2f}")
+        mc3.metric("Costos adicionales",  f"${_ca_total:,.2f}")
 
         ba, bb, bc = st.columns([2, 1, 1])
         with ba:
@@ -721,15 +768,30 @@ def _oc_tab_nueva():
                     i["cantidad"] * i.get("iva_unitario", 0)
                     for i in st.session_state.oc_items
                 )
-                id_oc = db.crear_orden_compra(prov, notas, total_iva_oc)
+                _costos_adic = st.session_state.get("oc_costos_adicionales", 0.0)
+                _desc_costos = st.session_state.get("oc_desc_costos_adicionales", "")
+                id_oc = db.crear_orden_compra(prov, notas, total_iva_oc,
+                                              _costos_adic, _desc_costos)
+                # Prorrateo proporcional de costos adicionales
+                _base_total = sum(
+                    i["cantidad"] * i["precio_compra"]
+                    for i in st.session_state.oc_items
+                )
                 for item in st.session_state.oc_items:
+                    if _costos_adic > 0 and _base_total > 0:
+                        _prop = (item["cantidad"] * item["precio_compra"]) / _base_total
+                        _cadu = round(_prop * _costos_adic / item["cantidad"], 4)
+                    else:
+                        _cadu = 0.0
                     db.crear_lote(id_oc, item["product_id"],
                                   item["sku"], item["cantidad"],
-                                  item["precio_compra"], item.get("nombre", ""))
+                                  item["precio_compra"], item.get("nombre", ""), _cadu)
                     woo_api.incrementar_stock(item["product_id"],
                                               item["cantidad"])
                 n = len(st.session_state.oc_items)
                 st.session_state.oc_items.clear()
+                st.session_state.oc_costos_adicionales     = 0.0
+                st.session_state.oc_desc_costos_adicionales = ""
                 _limpiar_borrador_oc(st.session_state.usuario_actual)
                 st.session_state.oc_producto_actual = None
                 st.session_state["oc_guardando"] = False
@@ -748,6 +810,8 @@ def _oc_tab_nueva():
         with bc:
             if st.button("🗑️ Limpiar lista", key="btn_oc_limpiar"):
                 st.session_state.oc_items.clear()
+                st.session_state.oc_costos_adicionales      = 0.0
+                st.session_state.oc_desc_costos_adicionales = ""
                 _limpiar_borrador_oc(st.session_state.usuario_actual)
                 st.session_state.oc_producto_actual = None
                 st.rerun()
@@ -761,6 +825,13 @@ def _oc_tab_historial():
         st.info("No hay OCs registradas aún.")
         return
 
+    # Mapa product_id → precio de venta WooCommerce (para % utilidad)
+    _wc_precio = {
+        p["id"]: float(p.get("price") or 0)
+        for p in _cargar_woo_cache()
+        if p.get("id")
+    }
+
     for oc in ocs:
         id_oc    = oc["id_oc"]
         lotes    = db.listar_lotes_por_oc(id_oc)
@@ -768,32 +839,57 @@ def _oc_tab_historial():
         total_oc = sum(l["cantidad_inicial"] * l["precio_compra_unitario"] for l in lotes)
         fecha_str = str(oc["fecha_ingreso"])[:10]
         stock_restante = sum(l["cantidad_actual"] for l in lotes)
+        costos_adic = float(oc.get("costos_adicionales") or 0)
 
         with st.expander(
             f"OC #{id_oc} — {oc['proveedor']}  │  {fecha_str}  │  {n_items} refs  │  ${total_oc:,.0f}"
+            + (f"  │  🚚 +${costos_adic:,.0f}" if costos_adic else "")
         ):
             if oc.get("notas"):
                 st.caption(f"📝 Notas: {oc['notas']}")
+            if costos_adic:
+                desc_c = oc.get("desc_costos_adicionales") or ""
+                st.caption(
+                    f"🚚 **Costos adicionales:** ${costos_adic:,.2f}"
+                    + (f"  —  {desc_c}" if desc_c else "")
+                )
 
             rows = []
             for l in lotes:
-                vendidas = l["cantidad_inicial"] - l["cantidad_actual"]
-                nombre_disp = l.get("nombre") or l["sku"] or str(l["product_id"])
+                vendidas     = l["cantidad_inicial"] - l["cantidad_actual"]
+                nombre_disp  = l.get("nombre") or l["sku"] or str(l["product_id"])
+                precio_base  = float(l["precio_compra_unitario"])
+                costo_adic_u = float(l.get("costo_adicional_unitario") or 0)
+                costo_real   = precio_base + costo_adic_u
+                pct_adic     = (costo_adic_u / costo_real * 100) if costo_real else 0
+
+                precio_venta_wc = _wc_precio.get(l["product_id"], 0)
+                if precio_venta_wc and costo_real:
+                    utilidad_pct = (precio_venta_wc - costo_real) / costo_real * 100
+                    util_str = f"{utilidad_pct:+.1f}%"
+                else:
+                    util_str = "—"
+
                 rows.append({
-                    "Nombre":        nombre_disp,
-                    "SKU":           l["sku"] or "—",
-                    "Ingresadas":    l["cantidad_inicial"],
-                    "Vendidas":      vendidas,
-                    "En stock":      l["cantidad_actual"],
-                    "Precio unit.":  f"${l['precio_compra_unitario']:,.2f}",
-                    "Subtotal":      f"${l['cantidad_inicial'] * l['precio_compra_unitario']:,.0f}",
+                    "Nombre":          nombre_disp,
+                    "SKU":             l["sku"] or "—",
+                    "Ingresadas":      l["cantidad_inicial"],
+                    "Vendidas":        vendidas,
+                    "En stock":        l["cantidad_actual"],
+                    "P. compra/ud":    f"${precio_base:,.2f}",
+                    "Costo adic./ud":  f"${costo_adic_u:,.2f}" if costo_adic_u else "—",
+                    "Costo real/ud":   f"${costo_real:,.2f}",
+                    "% Adic.":         f"{pct_adic:.1f}%" if costo_adic_u else "—",
+                    "% Util. WC":      util_str,
+                    "Subtotal costo":  f"${l['cantidad_inicial'] * costo_real:,.0f}",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Total OC", f"${total_oc:,.0f}")
-            mc2.metric("Referencias", n_items)
-            mc3.metric("Unidades en stock", stock_restante)
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Total mercancía", f"${total_oc:,.0f}")
+            mc2.metric("Costos adicionales", f"${costos_adic:,.0f}")
+            mc3.metric("Referencias", n_items)
+            mc4.metric("Unidades en stock", stock_restante)
 
             st.markdown("")
 

@@ -4,7 +4,9 @@ CREATE TABLE IF NOT EXISTS ordenes_compra (
     proveedor TEXT,
     fecha_ingreso DATETIME DEFAULT CURRENT_TIMESTAMP,
     notas TEXT,
-    iva_total DECIMAL(12,2) DEFAULT 0
+    iva_total DECIMAL(12,2) DEFAULT 0,
+    costos_adicionales DECIMAL(12,2) DEFAULT 0,
+    desc_costos_adicionales TEXT DEFAULT ''
 );
 
 -- Tabla de Lotes (Lógica FIFO)
@@ -17,6 +19,7 @@ CREATE TABLE IF NOT EXISTS lotes_inventario (
     cantidad_inicial INTEGER,
     cantidad_actual INTEGER, -- Aquí se descuenta según se vende
     precio_compra_unitario DECIMAL(10, 2),
+    costo_adicional_unitario DECIMAL(10,2) DEFAULT 0,
     FOREIGN KEY (id_oc) REFERENCES ordenes_compra(id_oc)
 );
 
