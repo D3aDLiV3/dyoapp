@@ -2312,47 +2312,156 @@ def pagina_finanzas():
 
             lista_filtrada = list(_filtrar_af(activos))
 
-            # ── Tabla principal ────────────────────────────────────────
-            rows_a = []
-            for a in lista_filtrada:
-                d       = _dep_activo(a, hoy_af)
-                fdq_str = str(a["fecha_adquisicion"] or "")[:10]
-                fi_str  = str(a["fecha_ingreso"]     or "")[:10]
-                rows_a.append({
-                    "#":            a["id_activo"],
-                    "Nombre":       a["nombre"],
+            # ── Lista con acciones inline ──────────────────────────────
+            _sel_id  = st.session_state.get("af_sel_id")
+            _sel_act = st.session_state.get("af_sel_action")
+            _cap_ico = {"SDSTI": "🔵", "DYO": "🟠", "Compartido": "🟣"}
+
+            if lista_filtrada:
+                # Cabecera
+                _h = st.columns([4.5, 1.2, 1.5, 1.8, 1.2, 0.55, 0.55, 0.55])
+                for _hc, _ht in zip(
+                    _h, ["Nombre / Detalle", "Capital", "Costo", "V. Libros / Dep.", "Estado", "", "", ""]
+                ):
+                    _hc.markdown(f"<small><b>{_ht}</b></small>", unsafe_allow_html=True)
+                st.divider()
+
+                for a in lista_filtrada:
+                    d   = _dep_activo(a, hoy_af)
+                    aid = a["id_activo"]
+                    ico = _cap_ico.get(a.get("capital") or "SDSTI", "⚪")
+
+                    rc = st.columns([4.5, 1.2, 1.5, 1.8, 1.2, 0.55, 0.55, 0.55])
+                    rc[0].markdown(
+                        f"{ico} **{a['nombre']}**  \n"
+                        f"<small style='color:#888'>{a.get('division') or '—'} · {a['categoria']}</small>",
+                        unsafe_allow_html=True,
+                    )
+                    rc[1].caption(a.get("capital") or "SDSTI")
+                    rc[2].markdown(f"${float(a['costo_adquisicion'] or 0):,.0f}")
+                    if d["fecha_ok"]:
+                        rc[3].markdown(
+                            f"${d['valor_libros']:,.0f}  \n"
+                            f"<small style='color:#999'>${d['dep_mensual']:,.0f}/mes · {d['pct_dep']:.0f}%</small>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        rc[3].caption("Sin fecha")
+                    rc[4].markdown("✅ En uso" if a["activo"] else "⛔ Baja")
+
+                    if rc[5].button("✏️", key=f"af_e_{aid}", help="Editar"):
+                        if _sel_id == aid and _sel_act == "edit":
+                            st.session_state.pop("af_sel_id", None)
+                            st.session_state.pop("af_sel_action", None)
+                        else:
+                            st.session_state.update(af_sel_id=aid, af_sel_action="edit")
+                        st.rerun()
+
+                    if a["activo"] and rc[6].button("⛔", key=f"af_b_{aid}", help="Dar de baja"):
+                        if _sel_id == aid and _sel_act == "baja":
+                            st.session_state.pop("af_sel_id", None)
+                            st.session_state.pop("af_sel_action", None)
+                        else:
+                            st.session_state.update(af_sel_id=aid, af_sel_action="baja")
+                        st.rerun()
+
+                    if rc[7].button("🗑️", key=f"af_d_{aid}", help="Eliminar"):
+                        if _sel_id == aid and _sel_act == "del":
+                            st.session_state.pop("af_sel_id", None)
+                            st.session_state.pop("af_sel_action", None)
+                        else:
+                            st.session_state.update(af_sel_id=aid, af_sel_action="del")
+                        st.rerun()
+
+                    # ── Panel inline para el activo seleccionado ───────
+                    if _sel_id == aid and _sel_act:
+                        with st.container(border=True):
+                            if _sel_act == "edit":
+                                st.markdown(f"**✏️ Editando — {a['nombre']}**")
+                                with st.form(f"f_edit_{aid}"):
+                                    ei1, ei2, ei3, ei4 = st.columns(4)
+                                    ei_nom = ei1.text_input("Nombre", value=a["nombre"])
+                                    _ck = list(db.CATEGORIAS_ACTIVO.keys())
+                                    ei_cat = ei2.selectbox("Categoría", _ck,
+                                        index=_ck.index(a["categoria"]) if a["categoria"] in _ck else 0)
+                                    _dk = db.DIVISIONES_ACTIVO
+                                    ei_div = ei3.selectbox("División", _dk,
+                                        index=_dk.index(a["division"]) if a["division"] in _dk else len(_dk)-1,
+                                        format_func=lambda x: x or "— Sin división —")
+                                    _pk = db.CAPITALES_ACTIVO
+                                    _pc = a.get("capital") or "SDSTI"
+                                    ei_cap = ei4.selectbox("Capital", _pk,
+                                        index=_pk.index(_pc) if _pc in _pk else 0)
+                                    ei5, ei6, ei7, ei8 = st.columns(4)
+                                    ei_cst = ei5.number_input("Costo ($)",        value=float(a["costo_adquisicion"] or 0), min_value=0.0, format="%.0f")
+                                    ei_res = ei6.number_input("V. Residual ($)",  value=float(a["valor_residual"]    or 0), min_value=0.0, format="%.0f")
+                                    ei_vc  = ei7.number_input("V. Comercial ($)", value=float(a["valor_comercial"]   or 0), min_value=0.0, format="%.0f")
+                                    ei_vid = ei8.number_input("Vida útil (años)", value=int(a["vida_util_anios"]), min_value=1, max_value=50)
+                                    ei9, ei10, ei11 = st.columns(3)
+                                    _fq  = a.get("fecha_adquisicion")
+                                    _fqv = _date_af.fromisoformat(str(_fq)[:10]) if _fq else hoy_af
+                                    _fin = a.get("fecha_ingreso")
+                                    _fiv = _date_af.fromisoformat(str(_fin)[:10]) if _fin else hoy_af
+                                    ei_fc = ei9.date_input("Fecha compra",   value=_fqv, key=f"efc_{aid}")
+                                    ei_fi = ei10.date_input("Fecha ingreso", value=_fiv, key=f"efi_{aid}")
+                                    ei_nt = ei11.text_input("Notas", value=a.get("notas") or "")
+                                    sa, sb = st.columns(2)
+                                    if sa.form_submit_button("💾 Guardar", type="primary", use_container_width=True):
+                                        db.actualizar_activo(
+                                            aid, ei_nom.strip(), ei_cat, ei_div,
+                                            ei_cst, ei_res, ei_vc,
+                                            str(ei_fc), str(ei_fi),
+                                            ei_vid, ei_nt.strip(), capital=ei_cap,
+                                        )
+                                        st.session_state.pop("af_sel_id", None)
+                                        st.session_state.pop("af_sel_action", None)
+                                        st.rerun()
+                                    if sb.form_submit_button("✖ Cancelar", use_container_width=True):
+                                        st.session_state.pop("af_sel_id", None)
+                                        st.session_state.pop("af_sel_action", None)
+                                        st.rerun()
+
+                            elif _sel_act == "baja":
+                                st.markdown(f"**⛔ Dar de baja — {a['nombre']}**")
+                                with st.form(f"f_baja_{aid}"):
+                                    bi1, bi2, bi3 = st.columns(3)
+                                    bi_mot = bi1.text_input("Motivo", placeholder="Dañado, Robado, Obsoleto…")
+                                    bi_dis = bi2.text_input("Disposición", placeholder="Desechado, Donado, En bodega…")
+                                    bi_fec = bi3.date_input("Fecha de baja", value=hoy_af)
+                                    ba, bb = st.columns(2)
+                                    if ba.form_submit_button("⛔ Confirmar baja", type="primary", use_container_width=True):
+                                        db.dar_baja_activo(aid, bi_mot.strip(), bi_dis.strip(), str(bi_fec))
+                                        st.session_state.pop("af_sel_id", None)
+                                        st.session_state.pop("af_sel_action", None)
+                                        st.rerun()
+                                    if bb.form_submit_button("✖ Cancelar", use_container_width=True):
+                                        st.session_state.pop("af_sel_id", None)
+                                        st.session_state.pop("af_sel_action", None)
+                                        st.rerun()
+
+                            elif _sel_act == "del":
+                                st.warning(f"⚠️ ¿Eliminar **{a['nombre']}** (#{aid}) definitivamente? Esta acción no se puede deshacer.")
+                                dc1, dc2 = st.columns(2)
+                                if dc1.button("🗑️ Sí, eliminar", key=f"af_dc_{aid}", type="primary"):
+                                    db.eliminar_activo(aid)
+                                    st.session_state.pop("af_sel_id", None)
+                                    st.session_state.pop("af_sel_action", None)
+                                    st.rerun()
+                                if dc2.button("✖ Cancelar", key=f"af_cc_{aid}"):
+                                    st.session_state.pop("af_sel_id", None)
+                                    st.session_state.pop("af_sel_action", None)
+                                    st.rerun()
+
+                _df_dl = pd.DataFrame([{
+                    "#": a["id_activo"], "Nombre": a["nombre"],
                     "Capital":      a.get("capital") or "SDSTI",
-                    "División":     a["division"] or "—",
+                    "División":     a["division"]    or "—",
                     "Categoría":    a["categoria"],
                     "Costo":        float(a["costo_adquisicion"] or 0),
                     "V. Comercial": float(a["valor_comercial"]   or 0),
-                    "V. Libros":    round(d["valor_libros"], 0),
-                    "Dep./mes":     round(d["dep_mensual"],  0),
-                    "% Dep.":       f"{d['pct_dep']:.1f}%" if d["fecha_ok"] else "—",
-                    "F. Compra":    fdq_str or "—",
-                    "F. Ingreso":   fi_str  or "—",
-                    "Estado":       "✅ En uso" if a["activo"] else "⛔ Baja",
-                    "Motivo baja":  a.get("motivo_baja")     or "",
-                    "Disposición":  a.get("disposicion_baja") or "",
-                })
-
-            df_af = pd.DataFrame(rows_a)
-            if not df_af.empty:
-                st.dataframe(
-                    df_af.style.format({
-                        "Costo":        "${:,.0f}",
-                        "V. Comercial": "${:,.0f}",
-                        "V. Libros":    "${:,.0f}",
-                        "Dep./mes":     "${:,.0f}",
-                    }).apply(
-                        lambda col: ["color:#e74c3c" if v == "⛔ Baja" else "" for v in col],
-                        subset=["Estado"],
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=400,
-                )
-                _df_download(df_af, "activos_fijos.xlsx")
+                    "Estado":       "En uso" if a["activo"] else "Baja",
+                } for a in lista_filtrada])
+                _df_download(_df_dl, "activos_fijos.xlsx")
             else:
                 st.info("Sin resultados para los filtros seleccionados.")
 
@@ -2395,101 +2504,6 @@ def pagina_finanzas():
                         )
                         st.success(f"✅ Activo '{nombre_a}' registrado.")
                         st.rerun()
-
-        # ── Editar activo ──────────────────────────────────────────────
-        with st.expander("✏️ Editar activo", expanded=False):
-            if not activos:
-                st.info("Sin activos registrados aún.")
-            else:
-                _edit_id = st.selectbox(
-                    "Seleccionar activo",
-                    [a["id_activo"] for a in activos],
-                    format_func=lambda x: f"#{x} — {next((a['nombre'] for a in activos if a['id_activo']==x), '')}",
-                    key="af_edit_sel",
-                )
-                _ea = next((a for a in activos if a["id_activo"] == _edit_id), None)
-                if _ea:
-                    with st.form("form_editar_activo"):
-                        e1, e2, e3, e4 = st.columns(4)
-                        e_nombre = e1.text_input("Nombre", value=_ea["nombre"])
-                        _cat_keys = list(db.CATEGORIAS_ACTIVO.keys())
-                        _cat_idx  = _cat_keys.index(_ea["categoria"]) if _ea["categoria"] in _cat_keys else 0
-                        e_cat  = e2.selectbox("Categoría", _cat_keys, index=_cat_idx)
-                        _divs    = db.DIVISIONES_ACTIVO
-                        _div_idx = _divs.index(_ea["division"]) if _ea["division"] in _divs else len(_divs) - 1
-                        e_div  = e3.selectbox("División", _divs, index=_div_idx,
-                                              format_func=lambda x: x or "— Sin división —")
-                        _caps    = db.CAPITALES_ACTIVO
-                        _cap_cur = _ea.get("capital") or "SDSTI"
-                        _cap_idx = _caps.index(_cap_cur) if _cap_cur in _caps else 0
-                        e_cap  = e4.selectbox("Capital", _caps, index=_cap_idx, key="eaf_cap")
-                        e5, e6, e7, e8 = st.columns(4)
-                        e_costo    = e5.number_input("Costo ($)",        value=float(_ea["costo_adquisicion"] or 0), min_value=0.0, format="%.0f")
-                        e_residual = e6.number_input("V. Residual ($)",  value=float(_ea["valor_residual"]    or 0), min_value=0.0, format="%.0f")
-                        e_vc       = e7.number_input("V. Comercial ($)", value=float(_ea["valor_comercial"]   or 0), min_value=0.0, format="%.0f")
-                        e_vida     = e8.number_input("Vida útil (años)", value=int(_ea["vida_util_anios"]), min_value=1, max_value=50)
-                        e9, e10, e11 = st.columns(3)
-                        _fdq     = _ea.get("fecha_adquisicion")
-                        _fdq_val = _date_af.fromisoformat(str(_fdq)[:10]) if _fdq else hoy_af
-                        _fi      = _ea.get("fecha_ingreso")
-                        _fi_val  = _date_af.fromisoformat(str(_fi)[:10]) if _fi else hoy_af
-                        e_fcomp = e9.date_input("Fecha de compra",  value=_fdq_val, key="eaf_fcomp")
-                        e_fing  = e10.date_input("Fecha de ingreso", value=_fi_val,  key="eaf_fing")
-                        e_notas = e11.text_input("Notas", value=_ea.get("notas") or "")
-                        if st.form_submit_button("💾 Guardar cambios", type="primary", use_container_width=True):
-                            db.actualizar_activo(
-                                _edit_id, e_nombre.strip(), e_cat, e_div,
-                                e_costo, e_residual, e_vc,
-                                str(e_fcomp), str(e_fing),
-                                e_vida, e_notas.strip(), capital=e_cap,
-                            )
-                            st.success("✅ Activo actualizado.")
-                            st.rerun()
-
-        # ── Dar de baja ────────────────────────────────────────────────
-        with st.expander("⛔ Dar de baja", expanded=False):
-            ids_en_uso = [a["id_activo"] for a in activos_en_uso]
-            if not ids_en_uso:
-                st.info("No hay activos en uso para dar de baja.")
-            else:
-                _nb_map = {a["id_activo"]: a["nombre"] for a in activos}
-                with st.form("form_baja_activo"):
-                    baja_id = st.selectbox(
-                        "Activo a dar de baja",
-                        ids_en_uso,
-                        format_func=lambda x: f"#{x} — {_nb_map[x]}",
-                        key="af_baja_sel",
-                    )
-                    b1, b2, b3 = st.columns(3)
-                    baja_motivo = b1.text_input("Motivo de baja",
-                                                placeholder="Ej: Dañado, Robado, Obsoleto…")
-                    baja_dispos = b2.text_input("Disposición",
-                                                placeholder="Ej: Desechado, Donado, En bodega…")
-                    baja_fecha  = b3.date_input("Fecha de baja", value=hoy_af)
-                    if st.form_submit_button("⛔ Confirmar baja", type="primary",
-                                             use_container_width=True):
-                        db.dar_baja_activo(baja_id, baja_motivo.strip(),
-                                           baja_dispos.strip(), str(baja_fecha))
-                        st.success(f"Activo #{baja_id} dado de baja.")
-                        st.rerun()
-
-        # ── Eliminar definitivamente ───────────────────────────────────
-        with st.expander("🗑️ Eliminar activo definitivamente", expanded=False):
-            if not activos:
-                st.info("Sin activos registrados aún.")
-            else:
-                _nb_map2 = {a["id_activo"]: a["nombre"] for a in activos}
-                del_id_a = st.selectbox(
-                    "Activo a eliminar",
-                    [a["id_activo"] for a in activos],
-                    format_func=lambda x: f"#{x} — {_nb_map2[x]}",
-                    key="af_del_id",
-                )
-                st.warning("⚠️ Esta acción es irreversible y elimina el registro permanentemente.")
-                if st.button("🗑️ Eliminar definitivamente", key="btn_del_activo", type="secondary"):
-                    db.eliminar_activo(del_id_a)
-                    st.success(f"Activo #{del_id_a} eliminado.")
-                    st.rerun()
 
         # ── Barras de depreciación (colapsable) ────────────────────────
         if activos_en_uso:
