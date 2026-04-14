@@ -645,7 +645,18 @@ def pagina_oc():
         df_oc_disp["iva_unitario"]  = df_oc_disp["iva_unitario"].apply(lambda x: f"${x:,.2f}")
         df_oc_disp["precio_compra"] = df_oc_disp["precio_compra"].apply(lambda x: f"${x:,.2f}")
         df_oc_disp.columns = ["SKU", "Nombre", "Cantidad", "IVA unitario", "Precio c/IVA"]
-        st.dataframe(df_oc_disp, use_container_width=True, hide_index=True)
+        # Columna de botones eliminar por fila
+        for i, row in enumerate(st.session_state.oc_items):
+            c1, c2, c3, c4, c5, c_del = st.columns([1.2, 2.5, 0.8, 1.2, 1.2, 0.6])
+            c1.caption(row["sku"])
+            c2.caption(row["nombre"])
+            c3.caption(str(row["cantidad"]))
+            c4.caption(f"${row.get('iva_unitario', 0):,.2f}")
+            c5.caption(f"${row['precio_compra']:,.2f}")
+            if c_del.button("🗑️", key=f"del_item_{i}", help="Eliminar este ítem"):
+                st.session_state.oc_items.pop(i)
+                st.rerun()
+        st.markdown("")
         total     = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
         total_iva = sum(i["cantidad"] * i.get("iva_unitario", 0) for i in st.session_state.oc_items)
         mc1, mc2 = st.columns(2)

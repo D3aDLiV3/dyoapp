@@ -176,6 +176,13 @@ def crear_orden_compra(proveedor: str, notas: str = "", iva_total: float = 0.0) 
         return _insert(conn, sql, (proveedor, notas, iva_total), "id_oc")
 
 
+def eliminar_orden_compra(id_oc: int):
+    """Elimina una OC y todos sus lotes. No toca ventas_procesadas."""
+    with _conn() as conn:
+        _exec(conn, "DELETE FROM lotes_inventario WHERE id_oc = ?", (id_oc,))
+        _exec(conn, "DELETE FROM ordenes_compra WHERE id_oc = ?", (id_oc,))
+
+
 def listar_ordenes_compra() -> list:
     with _conn() as conn:
         return _rows(conn, "SELECT * FROM ordenes_compra ORDER BY fecha_ingreso DESC")
