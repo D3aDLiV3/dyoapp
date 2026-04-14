@@ -2312,6 +2312,17 @@ def pagina_finanzas():
 
             lista_filtrada = list(_filtrar_af(activos))
 
+            # ── CSS: botones compactos ─────────────────────────────────
+            st.markdown("""
+<style>
+div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
+    padding: 2px 6px !important;
+    min-height: 0 !important;
+    height: 30px !important;
+    font-size: 14px !important;
+}
+</style>""", unsafe_allow_html=True)
+
             # ── Lista con acciones inline ──────────────────────────────
             _sel_id  = st.session_state.get("af_sel_id")
             _sel_act = st.session_state.get("af_sel_action")
@@ -2319,37 +2330,45 @@ def pagina_finanzas():
 
             if lista_filtrada:
                 # Cabecera
-                _h = st.columns([4.5, 1.2, 1.5, 1.8, 1.2, 0.55, 0.55, 0.55])
+                _h = st.columns([5, 1.5, 2, 1.2, 0.45, 0.45, 0.45])
                 for _hc, _ht in zip(
-                    _h, ["Nombre / Detalle", "Capital", "Costo", "V. Libros / Dep.", "Estado", "", "", ""]
+                    _h, ["Nombre / Categoría", "Costo", "V. Libros / Dep.", "Estado", "", "", ""]
                 ):
                     _hc.markdown(f"<small><b>{_ht}</b></small>", unsafe_allow_html=True)
-                st.divider()
 
                 for a in lista_filtrada:
+                    st.markdown("<hr style='margin:4px 0;border-color:#e0e0e0'>", unsafe_allow_html=True)
                     d   = _dep_activo(a, hoy_af)
                     aid = a["id_activo"]
                     ico = _cap_ico.get(a.get("capital") or "SDSTI", "⚪")
+                    cap_label = a.get("capital") or "SDSTI"
+                    div_label = a.get("division") or ""
+                    cat_label = a["categoria"]
+                    sub = f"{div_label} · {cat_label}" if div_label else cat_label
 
-                    rc = st.columns([4.5, 1.2, 1.5, 1.8, 1.2, 0.55, 0.55, 0.55])
+                    rc = st.columns([5, 1.5, 2, 1.2, 0.45, 0.45, 0.45])
                     rc[0].markdown(
-                        f"{ico} **{a['nombre']}**  \n"
-                        f"<small style='color:#888'>{a.get('division') or '—'} · {a['categoria']}</small>",
+                        f"{ico} **{a['nombre']}** "
+                        f"<span style='color:#888;font-size:12px'>· {sub}</span>  \n"
+                        f"<span style='color:#aaa;font-size:11px'>{cap_label}</span>",
                         unsafe_allow_html=True,
                     )
-                    rc[1].caption(a.get("capital") or "SDSTI")
-                    rc[2].markdown(f"${float(a['costo_adquisicion'] or 0):,.0f}")
+                    rc[1].markdown(f"${float(a['costo_adquisicion'] or 0):,.0f}")
                     if d["fecha_ok"]:
-                        rc[3].markdown(
+                        rc[2].markdown(
                             f"${d['valor_libros']:,.0f}  \n"
                             f"<small style='color:#999'>${d['dep_mensual']:,.0f}/mes · {d['pct_dep']:.0f}%</small>",
                             unsafe_allow_html=True,
                         )
                     else:
-                        rc[3].caption("Sin fecha")
-                    rc[4].markdown("✅ En uso" if a["activo"] else "⛔ Baja")
+                        rc[2].caption("Sin fecha")
+                    rc[3].markdown(
+                        "<span style='color:#27ae60'>✅ En uso</span>" if a["activo"]
+                        else "<span style='color:#e74c3c'>⛔ Baja</span>",
+                        unsafe_allow_html=True,
+                    )
 
-                    if rc[5].button("✏️", key=f"af_e_{aid}", help="Editar"):
+                    if rc[4].button("✏️", key=f"af_e_{aid}", help="Editar"):
                         if _sel_id == aid and _sel_act == "edit":
                             st.session_state.pop("af_sel_id", None)
                             st.session_state.pop("af_sel_action", None)
@@ -2357,7 +2376,7 @@ def pagina_finanzas():
                             st.session_state.update(af_sel_id=aid, af_sel_action="edit")
                         st.rerun()
 
-                    if a["activo"] and rc[6].button("⛔", key=f"af_b_{aid}", help="Dar de baja"):
+                    if a["activo"] and rc[5].button("⛔", key=f"af_b_{aid}", help="Dar de baja"):
                         if _sel_id == aid and _sel_act == "baja":
                             st.session_state.pop("af_sel_id", None)
                             st.session_state.pop("af_sel_action", None)
@@ -2365,7 +2384,7 @@ def pagina_finanzas():
                             st.session_state.update(af_sel_id=aid, af_sel_action="baja")
                         st.rerun()
 
-                    if rc[7].button("🗑️", key=f"af_d_{aid}", help="Eliminar"):
+                    if rc[6].button("🗑️", key=f"af_d_{aid}", help="Eliminar"):
                         if _sel_id == aid and _sel_act == "del":
                             st.session_state.pop("af_sel_id", None)
                             st.session_state.pop("af_sel_action", None)
