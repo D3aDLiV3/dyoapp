@@ -684,6 +684,39 @@ def _oc_tab_nueva():
             st.rerun()
 
     st.markdown("---")
+
+    # ── Costos adicionales (flete, transporte, etc.) ──────────────────────────
+    st.markdown("##### 🚚 Costos adicionales de la OC")
+    st.caption("Se distribuyen proporcionalmente entre los ítems según su valor relativo al guardar.")
+    _ca1, _ca2 = st.columns([1, 2])
+    with _ca1:
+        st.number_input(
+            "Monto ($)",
+            min_value=0.0, step=1000.0, format="%.2f",
+            key="oc_costos_adicionales",
+            help="Ej: flete, transporte, aduanas. Proporcional al valor de cada ítem.",
+        )
+    with _ca2:
+        st.text_input(
+            "Descripción",
+            placeholder="Ej: Flete Bogotá - Medellín",
+            key="oc_desc_costos_adicionales",
+        )
+    _ca_total = st.session_state.get("oc_costos_adicionales", 0.0)
+    if _ca_total > 0 and st.session_state.oc_items:
+        _base_total = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
+        if _base_total > 0:
+            with st.expander("Ver distribución por ítem", expanded=False):
+                for _it in st.session_state.oc_items:
+                    _prop = (_it["cantidad"] * _it["precio_compra"]) / _base_total
+                    _adic_u = round(_prop * _ca_total / _it["cantidad"], 2)
+                    st.caption(
+                        f"• **{_it['nombre'] or _it['sku']}** — "
+                        f"+${_adic_u:,.2f}/ud  "
+                        f"(costo real: ${_it['precio_compra'] + _adic_u:,.2f}/ud)"
+                    )
+
+    st.markdown("---")
     if st.session_state.oc_items:
         st.markdown("#### Ítems de la OC")
         df_oc = pd.DataFrame(st.session_state.oc_items)
@@ -709,38 +742,6 @@ def _oc_tab_nueva():
         st.markdown("")
         total     = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
         total_iva = sum(i["cantidad"] * i.get("iva_unitario", 0) for i in st.session_state.oc_items)
-
-        # ── Costos adicionales (flete, transporte, etc.) ──────────────────────
-        st.markdown("---")
-        st.markdown("##### Costos adicionales de la OC")
-        st.caption("Se distribuyen proporcionalmente entre los ítems según su valor relativo.")
-        _ca1, _ca2 = st.columns([1, 2])
-        with _ca1:
-            st.number_input(
-                "Monto ($)",
-                min_value=0.0, step=1000.0, format="%.2f",
-                key="oc_costos_adicionales",
-                help="Ej: flete, transporte, aduanas. Proporcional al valor de cada ítem.",
-            )
-        with _ca2:
-            st.text_input(
-                "Descripción",
-                placeholder="Ej: Flete Bogotá - Medellín",
-                key="oc_desc_costos_adicionales",
-            )
-        _ca_total = st.session_state.get("oc_costos_adicionales", 0.0)
-        if _ca_total > 0 and st.session_state.oc_items:
-            _base_total = sum(i["cantidad"] * i["precio_compra"] for i in st.session_state.oc_items)
-            if _base_total > 0:
-                with st.expander("Ver distribución por ítem", expanded=False):
-                    for _it in st.session_state.oc_items:
-                        _prop = (_it["cantidad"] * _it["precio_compra"]) / _base_total
-                        _adic_u = round(_prop * _ca_total / _it["cantidad"], 2)
-                        st.caption(
-                            f"• **{_it['nombre'] or _it['sku']}** — "
-                            f"+${_adic_u:,.2f}/ud  "
-                            f"(costo real: ${_it['precio_compra'] + _adic_u:,.2f}/ud)"
-                        )
 
         st.markdown("")
         mc1, mc2, mc3 = st.columns(3)

@@ -172,6 +172,11 @@ def init_db():
             with conn.cursor() as cur:
                 cur.execute("""
                     ALTER TABLE lotes_inventario
+                    ADD COLUMN IF NOT EXISTS nombre TEXT DEFAULT ''
+                """)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE lotes_inventario
                     ADD COLUMN IF NOT EXISTS costo_adicional_unitario DECIMAL(10,2) DEFAULT 0
                 """)
     else:
