@@ -194,6 +194,35 @@ st.markdown("""
 # ── Init DB ───────────────────────────────────────────────────────────────────
 db.init_db()
 
+# ── Tokens de sesión persistente (query param "t") ───────────────────────────
+_TOKENS_PATH = Path(__file__).parent / "active_sessions.json"
+
+def _save_session_token(usuario: str) -> str:
+    token = secrets.token_urlsafe(32)
+    tokens = {}
+    if _TOKENS_PATH.exists():
+        try:
+            tokens = json.loads(_TOKENS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    now = datetime.now().timestamp()
+    tokens = {k: v for k, v in tokens.items() if now - v.get("ts", 0) < 86400}
+    tokens[token] = {"usuario": usuario, "ts": now}
+    _TOKENS_PATH.write_text(json.dumps(tokens), encoding="utf-8")
+    return token
+
+def _validate_session_token(token: str) -> str:
+    if not _TOKENS_PATH.exists():
+        return ""
+    try:
+        tokens = json.loads(_TOKENS_PATH.read_text(encoding="utf-8"))
+        entry = tokens.get(token)
+        if entry and (datetime.now().timestamp() - entry.get("ts", 0)) < 86400:
+            return entry["usuario"]
+    except Exception:
+        pass
+    return ""
+
 # ── Inicializar session_state ─────────────────────────────────────────────────
 _es_sesion_nueva = "autenticado" not in st.session_state
 _DEFAULTS = {
@@ -277,6 +306,8 @@ def _pagina_login():
                 )
             elif _usr in _usuarios and _verificar_password(_pwd, _usuarios[_usr]["hash"]):
                 _slog.info(f"LOGIN | usuario={_usr}")
+                _tok = _save_session_token(_usr)
+                st.query_params["t"] = _tok
                 st.session_state.autenticado    = True
                 st.session_state.usuario_actual = _usr
                 st.rerun()
@@ -284,6 +315,20 @@ def _pagina_login():
                 _slog.info(f"LOGIN_FALLIDO | usuario={_usr}")
                 st.error("Usuario o contraseña incorrectos.")
 
+
+if not st.session_state.autenticado:
+    _tok = st.query_params.get("t", "")
+    if _tok:
+        _u = _validate_session_token(_tok)
+        if _u:
+            st.session_state.autenticado    = True
+            st.session_state.usuario_actual = _u
+            _slog.info(f"SESSION_RESTORED | usuario={_u}")
+        else:
+            try:
+                del st.query_params["t"]
+            except Exception:
+                pass
 
 if not st.session_state.autenticado:
     _pagina_login()
@@ -545,12 +590,7 @@ def _oc_tab_nueva():
 
     # Construir opciones: "SKU — Nombre del producto"
     # El primer elemento es el placeholder
-    _PLACEHOLDER = "— Selecciona un producto —"
-    opciones_labels = [_PLACEHOLDER] + [
-        f"{p.get('sku', '?')} — {p.get('name', '?')}"
-        for p in catalogo
-    ]
-    # Mapa label → producto
+    # Mapa label → producto (sin item placeholder)
     _cat_map = {
         f"{p.get('sku', '?')} — {p.get('name', '?')}": p
         for p in catalogo
@@ -558,64 +598,52 @@ def _oc_tab_nueva():
 
     sel_label = st.selectbox(
         "Buscar producto (SKU o nombre)",
-        options=opciones_labels,
-        index=0,
+        options=list(_cat_map.keys()),
+        index=None,
+        placeholder="— Escribe SKU o nombre para buscar —",
         key="oc_sel_producto",
-        help="Escribe el SKU o parte del nombre para filtrar",
     )
 
-    # Cuando el usuario selecciona un producto real, guardarlo
-    if sel_label != _PLACEHOLDER:
-        prod_sel = _cat_map.get(sel_label)
-        if prod_sel:
-            st.session_state.oc_producto_actual = {
-                "id":     prod_sel.get("id"),
-                "nombre": prod_sel.get("name", ""),
-                "sku":    prod_sel.get("sku", ""),
-            }
-    else:
-        # Sólo limpiar si el usuario volvió al placeholder manualmente
-        if st.session_state.oc_producto_actual and not st.session_state.get("_oc_just_added"):
-            pass  # Conservar selección hasta que se agregue o limpie
-
-    cols = st.columns([1, 1.5, 1])
-    with cols[0]:
-        cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1,
-                                   key="oc_cant")
-    with cols[1]:
-        precio = st.number_input("Precio Compra $", min_value=0.0, value=0.0,
-                                 step=0.01, format="%.2f", key="oc_precio")
-    with cols[2]:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        iva_incluido = st.checkbox(
-            "Precio IVA incluido",
-            key="oc_iva_incluido",
-            help="Marca si el precio que ingresas YA incluye el 19% de IVA. "
-                 "Si no está marcado, se sumará el 19% automáticamente.",
-        )
-
-    # Calcular precio final e IVA unitario
-    _IVA = 0.19
-    if iva_incluido:
-        precio_final   = precio
-        iva_unitario   = round(precio - precio / (1 + _IVA), 2)
-        precio_sin_iva = round(precio / (1 + _IVA), 2)
-    else:
-        precio_final   = round(precio * (1 + _IVA), 2)
-        iva_unitario   = round(precio * _IVA, 2)
-        precio_sin_iva = precio
-
-    if precio > 0:
-        if iva_incluido:
-            st.caption(f"Base: ${precio_sin_iva:,.2f}  +  IVA: ${iva_unitario:,.2f}  =  **${precio_final:,.2f}**")
-        else:
-            st.caption(f"${precio:,.2f}  +  19% IVA (${iva_unitario:,.2f})  =  **${precio_final:,.2f}**")
+    if sel_label:
+        prod_sel = _cat_map[sel_label]
+        st.session_state.oc_producto_actual = {
+            "id":     prod_sel.get("id"),
+            "nombre": prod_sel.get("name", ""),
+            "sku":    prod_sel.get("sku", ""),
+        }
+    elif not sel_label and not st.session_state.get("oc_items"):
+        st.session_state.oc_producto_actual = None
 
     if st.session_state.oc_producto_actual:
         p = st.session_state.oc_producto_actual
         st.info(f"✔ **{p['nombre']}** — WC ID: `{p['id']}`  SKU: `{p['sku']}`")
 
-    if st.button("➕ Agregar a OC", key="btn_oc_agregar", type="primary"):
+    iva_incluido = st.checkbox(
+        "Precio IVA incluido (19%)",
+        key="oc_iva_incluido",
+        help="Marca si el precio que ingresas YA incluye el 19% de IVA. "
+             "Si no está marcado, se sumará el 19% automáticamente.",
+    )
+
+    with st.form("form_agregar_item", clear_on_submit=True):
+        cols = st.columns([1, 2])
+        with cols[0]:
+            cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
+        with cols[1]:
+            precio = st.number_input("Precio Compra $", min_value=0.0, value=0.0,
+                                     step=0.01, format="%.2f")
+        submitted = st.form_submit_button("➕ Agregar a OC", type="primary",
+                                          use_container_width=True)
+
+    if submitted:
+        _iva_inc = st.session_state.get("oc_iva_incluido", False)
+        _IVA = 0.19
+        if _iva_inc:
+            precio_final = precio
+            iva_unitario = round(precio - precio / (1 + _IVA), 2)
+        else:
+            precio_final = round(precio * (1 + _IVA), 2)
+            iva_unitario = round(precio * _IVA, 2)
         if not st.session_state.oc_producto_actual:
             st.warning("Selecciona un producto primero.")
         elif precio <= 0:
@@ -631,6 +659,7 @@ def _oc_tab_nueva():
                 "iva_unitario":  float(iva_unitario),
             })
             st.session_state.oc_producto_actual = None
+            st.session_state.pop("oc_sel_producto", None)
             st.rerun()
 
     st.markdown("---")
