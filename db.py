@@ -215,7 +215,7 @@ def listar_lotes_por_producto(product_id: int) -> list:
 
 def listar_lotes_por_oc(id_oc: int) -> list:
     sql = """
-        SELECT product_id, sku, cantidad_inicial
+        SELECT product_id, sku, cantidad_inicial, cantidad_actual, precio_compra_unitario
         FROM lotes_inventario
         WHERE id_oc = ?
         ORDER BY id_lote ASC

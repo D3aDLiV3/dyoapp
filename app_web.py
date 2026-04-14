@@ -488,8 +488,7 @@ def pagina_inicio():
 # ═════════════════════════════════════════════════════════════════════════════
 #  MÓDULO: ORDEN DE COMPRA
 # ═════════════════════════════════════════════════════════════════════════════
-def pagina_oc():
-    st.title("📦 Nueva Orden de Compra")
+def _oc_tab_nueva():
 
     c1, c2 = st.columns([1, 2])
     with c1:
@@ -713,6 +712,87 @@ def pagina_oc():
                 st.rerun()
     else:
         st.info("Sin ítems aún. Busca un producto y agrégalo.")
+
+
+def _oc_tab_historial():
+    ocs = db.listar_ordenes_compra()
+    if not ocs:
+        st.info("No hay OCs registradas aún.")
+        return
+
+    for oc in ocs:
+        id_oc    = oc["id_oc"]
+        lotes    = db.listar_lotes_por_oc(id_oc)
+        n_items  = len(lotes)
+        total_oc = sum(l["cantidad_inicial"] * l["precio_compra_unitario"] for l in lotes)
+        fecha_str = str(oc["fecha_ingreso"])[:10]
+        stock_restante = sum(l["cantidad_actual"] for l in lotes)
+
+        with st.expander(
+            f"OC #{id_oc} — {oc['proveedor']}  │  {fecha_str}  │  {n_items} refs  │  ${total_oc:,.0f}"
+        ):
+            if oc.get("notas"):
+                st.caption(f"📝 Notas: {oc['notas']}")
+
+            rows = []
+            for l in lotes:
+                vendidas = l["cantidad_inicial"] - l["cantidad_actual"]
+                rows.append({
+                    "SKU":           l["sku"],
+                    "Ingresadas":    l["cantidad_inicial"],
+                    "Vendidas":      vendidas,
+                    "En stock":      l["cantidad_actual"],
+                    "Precio unit.":  f"${l['precio_compra_unitario']:,.2f}",
+                    "Subtotal":      f"${l['cantidad_inicial'] * l['precio_compra_unitario']:,.0f}",
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Total OC", f"${total_oc:,.0f}")
+            mc2.metric("Referencias", n_items)
+            mc3.metric("Unidades en stock", stock_restante)
+
+            st.markdown("")
+
+            # ── Eliminar con confirmación ─────────────────────────────────
+            clave_conf = f"_confirmar_del_oc_{id_oc}"
+            if not st.session_state.get(clave_conf):
+                if st.button(f"🗑️ Eliminar OC #{id_oc}",
+                             key=f"del_oc_{id_oc}", type="secondary"):
+                    st.session_state[clave_conf] = True
+                    st.rerun()
+            else:
+                st.error(
+                    f"¿Eliminar OC #{id_oc} ({oc['proveedor']})? "
+                    f"Se restarán **{stock_restante} unidades** del stock en WooCommerce "
+                    "(solo las unidades que aún no se han vendido).",
+                    icon="⚠️",
+                )
+                c1, c2 = st.columns(2)
+                if c1.button("✅ Sí, eliminar", key=f"conf_ok_{id_oc}", type="primary"):
+                    try:
+                        for l in lotes:
+                            if l["cantidad_actual"] > 0:
+                                woo_api.incrementar_stock(l["product_id"], -l["cantidad_actual"])
+                        db.eliminar_orden_compra(id_oc)
+                        st.session_state.pop(clave_conf, None)
+                        _cargar_woo_cache.clear()
+                        st.success(f"OC #{id_oc} eliminada y stock revertido en WooCommerce.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar: {e}")
+                if c2.button("❌ Cancelar", key=f"conf_no_{id_oc}"):
+                    st.session_state.pop(clave_conf, None)
+                    st.rerun()
+
+
+def pagina_oc():
+    st.title("📦 Órdenes de Compra")
+    tab1, tab2 = st.tabs(["📝 Nueva OC", "📋 Mis OCs"])
+    with tab1:
+        _oc_tab_nueva()
+    with tab2:
+        _oc_tab_historial()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
