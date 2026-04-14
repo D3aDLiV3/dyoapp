@@ -2287,22 +2287,26 @@ def pagina_finanzas():
 
         # ── Filtros ────────────────────────────────────────────────────
         if activos:
-            fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 2])
+            fc1, fc2, fc3, fc4, fc5 = st.columns([2, 2, 2, 2, 2])
+            _cap_opts    = ["Todos"] + db.CAPITALES_ACTIVO
             _div_opts    = ["Todas"] + sorted({a["division"] or "Sin división" for a in activos})
             _cat_opts    = ["Todas"] + sorted({a["categoria"] for a in activos})
             _est_opts    = ["Todos", "En uso", "Dados de baja"]
-            filtro_div   = fc1.selectbox("División",  _div_opts, key="af_f_div")
-            filtro_cat   = fc2.selectbox("Categoría", _cat_opts, key="af_f_cat")
-            filtro_est   = fc3.selectbox("Estado",    _est_opts, key="af_f_est")
-            buscar_af    = fc4.text_input("Buscar",   key="af_buscar", placeholder="Nombre…")
+            filtro_cap   = fc1.selectbox("Capital",   _cap_opts, key="af_f_cap")
+            filtro_div   = fc2.selectbox("División",  _div_opts, key="af_f_div")
+            filtro_cat   = fc3.selectbox("Categoría", _cat_opts, key="af_f_cat")
+            filtro_est   = fc4.selectbox("Estado",    _est_opts, key="af_f_est")
+            buscar_af    = fc5.text_input("Buscar",   key="af_buscar", placeholder="Nombre…")
 
             def _filtrar_af(lista):
                 for a in lista:
                     div_a = a["division"] or "Sin división"
-                    if filtro_div != "Todas" and div_a != filtro_div:      continue
-                    if filtro_cat != "Todas" and a["categoria"] != filtro_cat: continue
-                    if filtro_est == "En uso"         and not a["activo"]: continue
-                    if filtro_est == "Dados de baja"  and a["activo"]:     continue
+                    cap_a = a.get("capital") or "SDSTI"
+                    if filtro_cap != "Todos"            and cap_a != filtro_cap:          continue
+                    if filtro_div != "Todas"            and div_a != filtro_div:          continue
+                    if filtro_cat != "Todas"            and a["categoria"] != filtro_cat: continue
+                    if filtro_est == "En uso"           and not a["activo"]: continue
+                    if filtro_est == "Dados de baja"    and a["activo"]:     continue
                     if buscar_af and buscar_af.lower() not in a["nombre"].lower(): continue
                     yield a
 
@@ -2317,6 +2321,7 @@ def pagina_finanzas():
                 rows_a.append({
                     "#":            a["id_activo"],
                     "Nombre":       a["nombre"],
+                    "Capital":      a.get("capital") or "SDSTI",
                     "División":     a["division"] or "—",
                     "Categoría":    a["categoria"],
                     "Costo":        float(a["costo_adquisicion"] or 0),
@@ -2356,22 +2361,23 @@ def pagina_finanzas():
         # ── Formulario registrar activo ────────────────────────────────
         with st.expander("➕ Registrar activo fijo", expanded=False):
             with st.form("form_nuevo_activo", clear_on_submit=True):
-                na1, na2, na3 = st.columns(3)
+                na1, na2, na3, na4 = st.columns(4)
                 nombre_a = na1.text_input("Nombre del activo", placeholder='Ej: Monitor Dell 27"')
                 cat_a    = na2.selectbox("Categoría", list(db.CATEGORIAS_ACTIVO.keys()))
                 div_a    = na3.selectbox("División", db.DIVISIONES_ACTIVO,
                                          format_func=lambda x: x or "— Sin división —")
-                na4, na5, na6, na7 = st.columns(4)
-                costo_a    = na4.number_input("Costo adquisición ($)", min_value=0.0, step=10000.0, format="%.0f")
-                residual_a = na5.number_input("Valor residual ($)",    min_value=0.0, step=1000.0,  format="%.0f",
+                cap_a_new = na4.selectbox("Capital", db.CAPITALES_ACTIVO, key="naf_cap")
+                na5, na6, na7, na8 = st.columns(4)
+                costo_a    = na5.number_input("Costo adquisición ($)", min_value=0.0, step=10000.0, format="%.0f")
+                residual_a = na6.number_input("Valor residual ($)",    min_value=0.0, step=1000.0,  format="%.0f",
                                               help="Valor estimado al final de su vida útil (puede ser 0)")
-                vc_a       = na6.number_input("Valor comercial ($)",   min_value=0.0, step=10000.0, format="%.0f")
-                vida_a     = na7.number_input("Vida útil (años)", min_value=1, max_value=50,
+                vc_a       = na7.number_input("Valor comercial ($)",   min_value=0.0, step=10000.0, format="%.0f")
+                vida_a     = na8.number_input("Vida útil (años)", min_value=1, max_value=50,
                                               value=db.CATEGORIAS_ACTIVO[cat_a])
-                na8, na9, na10 = st.columns(3)
-                fecha_cpa = na8.date_input("Fecha de compra",   value=hoy_af, key="naf_fcomp")
-                fecha_ina = na9.date_input("Fecha de ingreso",  value=hoy_af, key="naf_fing")
-                notas_a   = na10.text_input("Notas", placeholder="Opcional")
+                na9, na10, na11 = st.columns(3)
+                fecha_cpa = na9.date_input("Fecha de compra",   value=hoy_af, key="naf_fcomp")
+                fecha_ina = na10.date_input("Fecha de ingreso",  value=hoy_af, key="naf_fing")
+                notas_a   = na11.text_input("Notas", placeholder="Opcional")
                 if costo_a > 0 and vida_a > 0:
                     _pd = (costo_a - residual_a) / (vida_a * 12)
                     st.caption(f"📉 Dep. estimada: **${_pd:,.0f}**/mes → **${_pd*12:,.0f}**/año")
@@ -2385,7 +2391,7 @@ def pagina_finanzas():
                             nombre_a.strip(), cat_a, costo_a, residual_a,
                             str(fecha_cpa), int(vida_a), notas_a.strip(),
                             division=div_a, valor_comercial=vc_a,
-                            fecha_ingreso=str(fecha_ina),
+                            fecha_ingreso=str(fecha_ina), capital=cap_a_new,
                         )
                         st.success(f"✅ Activo '{nombre_a}' registrado.")
                         st.rerun()
@@ -2404,7 +2410,7 @@ def pagina_finanzas():
                 _ea = next((a for a in activos if a["id_activo"] == _edit_id), None)
                 if _ea:
                     with st.form("form_editar_activo"):
-                        e1, e2, e3 = st.columns(3)
+                        e1, e2, e3, e4 = st.columns(4)
                         e_nombre = e1.text_input("Nombre", value=_ea["nombre"])
                         _cat_keys = list(db.CATEGORIAS_ACTIVO.keys())
                         _cat_idx  = _cat_keys.index(_ea["categoria"]) if _ea["categoria"] in _cat_keys else 0
@@ -2413,25 +2419,29 @@ def pagina_finanzas():
                         _div_idx = _divs.index(_ea["division"]) if _ea["division"] in _divs else len(_divs) - 1
                         e_div  = e3.selectbox("División", _divs, index=_div_idx,
                                               format_func=lambda x: x or "— Sin división —")
-                        e4, e5, e6, e7 = st.columns(4)
-                        e_costo    = e4.number_input("Costo ($)",        value=float(_ea["costo_adquisicion"] or 0), min_value=0.0, format="%.0f")
-                        e_residual = e5.number_input("V. Residual ($)",  value=float(_ea["valor_residual"]    or 0), min_value=0.0, format="%.0f")
-                        e_vc       = e6.number_input("V. Comercial ($)", value=float(_ea["valor_comercial"]   or 0), min_value=0.0, format="%.0f")
-                        e_vida     = e7.number_input("Vida útil (años)", value=int(_ea["vida_util_anios"]), min_value=1, max_value=50)
-                        e8, e9, e10 = st.columns(3)
+                        _caps    = db.CAPITALES_ACTIVO
+                        _cap_cur = _ea.get("capital") or "SDSTI"
+                        _cap_idx = _caps.index(_cap_cur) if _cap_cur in _caps else 0
+                        e_cap  = e4.selectbox("Capital", _caps, index=_cap_idx, key="eaf_cap")
+                        e5, e6, e7, e8 = st.columns(4)
+                        e_costo    = e5.number_input("Costo ($)",        value=float(_ea["costo_adquisicion"] or 0), min_value=0.0, format="%.0f")
+                        e_residual = e6.number_input("V. Residual ($)",  value=float(_ea["valor_residual"]    or 0), min_value=0.0, format="%.0f")
+                        e_vc       = e7.number_input("V. Comercial ($)", value=float(_ea["valor_comercial"]   or 0), min_value=0.0, format="%.0f")
+                        e_vida     = e8.number_input("Vida útil (años)", value=int(_ea["vida_util_anios"]), min_value=1, max_value=50)
+                        e9, e10, e11 = st.columns(3)
                         _fdq     = _ea.get("fecha_adquisicion")
                         _fdq_val = _date_af.fromisoformat(str(_fdq)[:10]) if _fdq else hoy_af
                         _fi      = _ea.get("fecha_ingreso")
                         _fi_val  = _date_af.fromisoformat(str(_fi)[:10]) if _fi else hoy_af
-                        e_fcomp = e8.date_input("Fecha de compra",  value=_fdq_val, key="eaf_fcomp")
-                        e_fing  = e9.date_input("Fecha de ingreso", value=_fi_val,  key="eaf_fing")
-                        e_notas = e10.text_input("Notas", value=_ea.get("notas") or "")
+                        e_fcomp = e9.date_input("Fecha de compra",  value=_fdq_val, key="eaf_fcomp")
+                        e_fing  = e10.date_input("Fecha de ingreso", value=_fi_val,  key="eaf_fing")
+                        e_notas = e11.text_input("Notas", value=_ea.get("notas") or "")
                         if st.form_submit_button("💾 Guardar cambios", type="primary", use_container_width=True):
                             db.actualizar_activo(
                                 _edit_id, e_nombre.strip(), e_cat, e_div,
                                 e_costo, e_residual, e_vc,
                                 str(e_fcomp), str(e_fing),
-                                e_vida, e_notas.strip(),
+                                e_vida, e_notas.strip(), capital=e_cap,
                             )
                             st.success("✅ Activo actualizado.")
                             st.rerun()

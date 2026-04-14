@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS activos_fijos (
     fecha_registro    DATETIME DEFAULT CURRENT_TIMESTAMP,
     motivo_baja       TEXT,
     disposicion_baja  TEXT,
-    fecha_baja        DATE
+    fecha_baja        DATE,
+    capital           TEXT DEFAULT 'SDSTI'  -- SDSTI | DYO | Compartido
 );
 
 -- Tabla de Gastos Operativos (salarios, arriendo, servicios, etc.)

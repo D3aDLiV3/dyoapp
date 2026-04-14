@@ -82,7 +82,8 @@ _SCHEMA_PG = [
         fecha_ingreso     DATE,
         motivo_baja       TEXT,
         disposicion_baja  TEXT,
-        fecha_baja        DATE
+        fecha_baja        DATE,
+        capital           TEXT DEFAULT 'SDSTI'
     )""",
 ]
 
@@ -206,6 +207,7 @@ def init_db():
                 "ALTER TABLE activos_fijos ADD COLUMN IF NOT EXISTS motivo_baja TEXT",
                 "ALTER TABLE activos_fijos ADD COLUMN IF NOT EXISTS disposicion_baja TEXT",
                 "ALTER TABLE activos_fijos ADD COLUMN IF NOT EXISTS fecha_baja DATE",
+                "ALTER TABLE activos_fijos ADD COLUMN IF NOT EXISTS capital TEXT DEFAULT 'SDSTI'",
             ]
             for _sql_m in _af_migs:
                 try:
@@ -243,6 +245,8 @@ def init_db():
                 conn.execute("ALTER TABLE activos_fijos ADD COLUMN disposicion_baja TEXT")
             if "fecha_baja" not in cols_af:
                 conn.execute("ALTER TABLE activos_fijos ADD COLUMN fecha_baja DATE")
+            if "capital" not in cols_af:
+                conn.execute("ALTER TABLE activos_fijos ADD COLUMN capital TEXT DEFAULT 'SDSTI'")
 
 
 # ── Órdenes de Compra ─────────────────────────────────────────────────────────
@@ -597,6 +601,8 @@ DIVISIONES_ACTIVO = [
     "Desarrollo", "Cyberseguridad", "Operatividad", "",
 ]
 
+CAPITALES_ACTIVO = ["SDSTI", "DYO", "Compartido"]
+
 
 def registrar_gasto(categoria: str, descripcion: str, monto: float,
                     fecha: str, recurrente: bool = False) -> int:
@@ -710,19 +716,20 @@ def patrimonio_inventario() -> list:
 def registrar_activo(nombre: str, categoria: str, costo: float, valor_residual: float,
                      fecha_adquisicion: str, vida_util_anios: int, notas: str = "",
                      division: str = "", valor_comercial: float = 0.0,
-                     fecha_ingreso: str = None) -> int:
+                     fecha_ingreso: str = None, capital: str = "SDSTI") -> int:
     fecha_reg = _datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sql = """
         INSERT INTO activos_fijos
-            (nombre, categoria, division, costo_adquisicion, valor_residual,
+            (nombre, categoria, division, capital, costo_adquisicion, valor_residual,
              valor_comercial, fecha_adquisicion, vida_util_anios, activo,
              notas, fecha_registro, fecha_ingreso)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
     """
     with _conn() as conn:
         return _insert(conn, sql,
-                       (nombre, categoria, division or "", costo, valor_residual,
-                        valor_comercial or 0.0, fecha_adquisicion, vida_util_anios,
+                       (nombre, categoria, division or "", capital or "SDSTI",
+                        costo, valor_residual, valor_comercial or 0.0,
+                        fecha_adquisicion, vida_util_anios,
                         notas or None, fecha_reg, fecha_ingreso or None),
                        "id_activo")
 
@@ -730,16 +737,16 @@ def registrar_activo(nombre: str, categoria: str, costo: float, valor_residual: 
 def actualizar_activo(id_activo: int, nombre: str, categoria: str, division: str,
                       costo: float, valor_residual: float, valor_comercial: float,
                       fecha_adquisicion: str, fecha_ingreso: str,
-                      vida_util_anios: int, notas: str = ""):
+                      vida_util_anios: int, notas: str = "", capital: str = "SDSTI"):
     sql = """
         UPDATE activos_fijos SET
-            nombre=?, categoria=?, division=?,
+            nombre=?, categoria=?, division=?, capital=?,
             costo_adquisicion=?, valor_residual=?, valor_comercial=?,
             fecha_adquisicion=?, fecha_ingreso=?, vida_util_anios=?, notas=?
         WHERE id_activo=?
     """
     with _conn() as conn:
-        _exec(conn, sql, (nombre, categoria, division or "",
+        _exec(conn, sql, (nombre, categoria, division or "", capital or "SDSTI",
                           costo, valor_residual, valor_comercial or 0.0,
                           fecha_adquisicion or None, fecha_ingreso or None,
                           vida_util_anios, notas or None, id_activo))
@@ -748,7 +755,7 @@ def actualizar_activo(id_activo: int, nombre: str, categoria: str, division: str
 def listar_activos(solo_activos: bool = False) -> list:
     where = "WHERE activo = 1" if solo_activos else ""
     sql = f"""
-        SELECT id_activo, nombre, categoria, division, costo_adquisicion,
+        SELECT id_activo, nombre, categoria, division, capital, costo_adquisicion,
                valor_residual, valor_comercial, fecha_adquisicion, fecha_ingreso,
                vida_util_anios, activo, notas, motivo_baja, disposicion_baja, fecha_baja
         FROM activos_fijos
@@ -886,17 +893,17 @@ def importar_activos_iniciales() -> int:
     fecha_reg = _datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sql = """
         INSERT INTO activos_fijos
-            (nombre, division, categoria, costo_adquisicion, valor_comercial,
+            (nombre, division, capital, categoria, costo_adquisicion, valor_comercial,
              valor_residual, fecha_adquisicion, vida_util_anios, activo,
              fecha_registro, fecha_ingreso)
-        VALUES (?, ?, ?, ?, ?, 0, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 1, ?, ?)
     """
     count = 0
     with _conn() as conn:
         for row in _INV:
             nombre, div, cat, costo, vc, fecha_adq, fecha_ing = row
             vida = CATEGORIAS_ACTIVO.get(cat, 5)
-            _exec(conn, sql, (nombre, div, cat, float(costo), float(vc),
+            _exec(conn, sql, (nombre, div, "SDSTI", cat, float(costo), float(vc),
                               fecha_adq, vida, fecha_reg, fecha_ing))
             count += 1
     return count
