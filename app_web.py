@@ -2353,11 +2353,11 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"]{
                         f"<span style='color:#aaa;font-size:11px;margin-left:4px'>[{cap_label}]</span>",
                         unsafe_allow_html=True,
                     )
-                    rc[1].markdown(f"${float(a['costo_adquisicion'] or 0):,.0f}")
+                    rc[1].markdown(f"&#36;{float(a['costo_adquisicion'] or 0):,.0f}", unsafe_allow_html=True)
                     if d["fecha_ok"]:
                         rc[2].markdown(
-                            f"${d['valor_libros']:,.0f}  \n"
-                            f"<small style='color:#999'>${d['dep_mensual']:,.0f}/mes · {d['pct_dep']:.0f}%</small>",
+                            f"&#36;{d['valor_libros']:,.0f}<br>"
+                            f"<small style='color:#999'>&#36;{d['dep_mensual']:,.0f}/mes · {d['pct_dep']:.0f}%</small>",
                             unsafe_allow_html=True,
                         )
                     else:
