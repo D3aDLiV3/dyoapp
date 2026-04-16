@@ -4,8 +4,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 
 # Configura tus credenciales aquí
-EMAIL = "TU_CORREO"
-PASSWORD = "TU_PASSWORD"
+EMAIL = "descuentosyofertasco@gmail.com"
+PASSWORD = "D3$cv3nto$123."
 
 # Opcional: para guardar screenshots en cada paso
 def save_step(driver, step):
