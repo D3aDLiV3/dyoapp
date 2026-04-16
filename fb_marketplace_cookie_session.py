@@ -6,8 +6,8 @@ from selenium.webdriver.chrome.options import Options
 import shutil
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
-COOKIES_FILE = "cookies.json"  # Debes guardar tus cookies aquí
-PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"  # Cambia por tu URL
+COOKIES_FILE = "cookies.json"
+PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"  # URL fijo del perfil a auditar
 
 # --- Configuración de Chrome headless para servidor Linux ---
 def get_chrome_driver():
