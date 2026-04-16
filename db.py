@@ -7,6 +7,7 @@ Si config.json contiene 'database_url', usa PostgreSQL; si no, SQLite local.
 import json
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime as _datetime
 from pathlib import Path
@@ -25,6 +26,9 @@ _cfg: dict = (
 )
 _DATABASE_URL: str = _cfg.get("database_url", "")
 _USE_PG: bool = bool(_DATABASE_URL) and _HAS_PSYCOPG2
+_PG_CONNECT_TIMEOUT: int = int(_cfg.get("pg_connect_timeout", 5) or 5)
+_PG_CONNECT_RETRIES: int = int(_cfg.get("pg_connect_retries", 6) or 6)
+_PG_RETRY_DELAY: float = float(_cfg.get("pg_retry_delay", 2) or 2)
 
 DB_PATH     = Path(__file__).parent / "wooposadmin.db"
 SCHEMA_PATH = Path(__file__).parent / "schema_local.sql"
@@ -89,11 +93,24 @@ _SCHEMA_PG = [
 
 # ── Helpers internos ──────────────────────────────────────────────────────────
 
+def _connect_pg():
+    """Abre conexión PG con reintentos para tolerar arranques lentos del servicio."""
+    last_error = None
+    for attempt in range(1, _PG_CONNECT_RETRIES + 1):
+        try:
+            return psycopg2.connect(_DATABASE_URL, connect_timeout=_PG_CONNECT_TIMEOUT)
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            if attempt == _PG_CONNECT_RETRIES:
+                raise
+            time.sleep(_PG_RETRY_DELAY)
+    raise last_error
+
 @contextmanager
 def _conn():
     """Context manager que devuelve conexión SQLite o PostgreSQL."""
     if _USE_PG:
-        c = psycopg2.connect(_DATABASE_URL)
+        c = _connect_pg()
         try:
             yield c
             c.commit()

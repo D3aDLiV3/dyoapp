@@ -262,7 +262,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Init DB ───────────────────────────────────────────────────────────────────
-db.init_db()
+try:
+    db.init_db()
+except Exception as exc:
+    st.error("No se pudo conectar a PostgreSQL. La app cargó en modo de espera.")
+    st.info("Verifica que el servicio de PostgreSQL esté arriba y luego reinicia la app.")
+    with st.expander("Detalle técnico"):
+        st.code(str(exc))
+    st.stop()
 
 # ── Tokens de sesión persistente (query param "t") ───────────────────────────
 _TOKENS_PATH = Path(__file__).parent / "active_sessions.json"
