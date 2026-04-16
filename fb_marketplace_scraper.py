@@ -87,137 +87,125 @@ class FacebookMarketplaceScraper:
         log.info("Sesión OK, iniciando scroll")
 
         # --- Scroll + recolección en tiempo real ---
-        # Facebook NO scrollea con window.scrollTo (body height=941 fijo).
-        # Usa un div contenedor con overflow. Scrolleamos haciendo
-        # scrollIntoView() en el último producto visible para forzar carga.
+        # Facebook usa virtual DOM: elementos se crean/destruyen al scrollear.
+        # NUNCA guardar referencias WebElement entre scrolls (causa StaleElement).
+        # Todo el scroll se hace con JS puro para evitar stale references.
         seen = {}  # listing_id -> {'title': ..., 'price': ...}
         max_scrolls = 100
         stale_attempts = 0
         max_stale = 10
 
-        def _collect():
-            """Lee productos visibles en el DOM y los acumula en seen."""
-            items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
-            for item in items:
-                try:
-                    href = item.get_attribute('href') or ''
-                    label = item.get_attribute('aria-label')
-                    if not label or not href:
-                        continue
-                    lm = re.search(r'/marketplace/item/(\d+)', href)
-                    if not lm:
-                        continue
-                    lid = lm.group(1)
-                    if lid in seen:
-                        continue
-                    lc = label.replace('\xa0', ' ')
-                    m = re.match(r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
-                    if m:
-                        t, p = m.group(1).strip(), '$ ' + m.group(2).strip()
-                    else:
-                        m2 = re.match(r'^(.*?),\s*COP\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
-                        if m2:
-                            t, p = m2.group(1).strip(), 'COP ' + m2.group(2).strip()
-                        else:
-                            log.debug(f"  aria-label sin match: {lc[:120]}")
-                            continue
-                    if t:
-                        seen[lid] = {'title': t, 'price': p}
-                        log.debug(f"  NUEVO: [{lid}] {t} | {p}")
-                except Exception as ex:
-                    log.debug(f"  Error leyendo item: {ex}")
-                    continue
-
-        # JS para encontrar el contenedor scrolleable real de Facebook
-        find_scroll_container_js = """
+        # JS que recolecta productos directamente en el navegador (sin WebElement refs)
+        collect_js = """
+        var result = [];
         var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
-        if (items.length === 0) return null;
+        items.forEach(function(a) {
+            var href = a.getAttribute('href') || '';
+            var label = a.getAttribute('aria-label') || '';
+            if (href && label) {
+                result.push({href: href, label: label});
+            }
+        });
+        return result;
+        """
+
+        # JS que scrollea haciendo scrollIntoView en el último producto
+        scroll_last_js = """
+        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        if (items.length > 0) {
+            items[items.length - 1].scrollIntoView({behavior: 'instant', block: 'end'});
+        }
+        """
+
+        # JS que scrollea el contenedor padre overflow (si existe)
+        scroll_container_js = """
+        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        if (items.length === 0) return 'no_items';
         var el = items[0].parentElement;
         while (el && el !== document.body && el !== document.documentElement) {
             var style = window.getComputedStyle(el);
             if ((style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight) {
-                return el;
+                el.scrollTop = el.scrollHeight;
+                return 'scrollTop=' + el.scrollTop + ' scrollH=' + el.scrollHeight + ' clientH=' + el.clientHeight;
             }
             el = el.parentElement;
         }
-        return null;
+        window.scrollTo(0, document.body.scrollHeight);
+        return 'window_fallback';
         """
 
-        scroll_container = self.driver.execute_script(find_scroll_container_js)
-        if scroll_container:
-            debug.append("Contenedor scroll detectado (div interno)")
-            log.info("Contenedor scroll interno encontrado")
-        else:
-            debug.append("Sin contenedor scroll especial, usando fallbacks")
-            log.info("No se encontró contenedor scroll interno")
+        # JS para scroll intermedio (subir a la mitad y volver)
+        scroll_bounce_js = """
+        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        if (items.length > 1) {
+            var mid = Math.floor(items.length / 2);
+            items[mid].scrollIntoView({behavior: 'instant', block: 'center'});
+        }
+        """
+
+        def _collect_from_js():
+            """Recolecta productos usando JS puro, sin WebElement refs."""
+            try:
+                raw = self.driver.execute_script(collect_js)
+            except Exception as ex:
+                log.debug(f"  Error en collect_js: {ex}")
+                return
+            for item in (raw or []):
+                href = item.get('href', '')
+                label = item.get('label', '')
+                lm = re.search(r'/marketplace/item/(\d+)', href)
+                if not lm:
+                    continue
+                lid = lm.group(1)
+                if lid in seen:
+                    continue
+                lc = label.replace('\xa0', ' ')
+                m = re.match(r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
+                if m:
+                    t, p = m.group(1).strip(), '$ ' + m.group(2).strip()
+                else:
+                    m2 = re.match(r'^(.*?),\s*COP\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
+                    if m2:
+                        t, p = m2.group(1).strip(), 'COP ' + m2.group(2).strip()
+                    else:
+                        log.debug(f"  aria-label sin match: {lc[:120]}")
+                        continue
+                if t:
+                    seen[lid] = {'title': t, 'price': p}
+                    log.debug(f"  NUEVO: [{lid}] {t} | {p}")
 
         for i in range(max_scrolls):
-            _collect()
+            _collect_from_js()
             prev_total = len(seen)
 
-            # Estrategia 1: scrollIntoView en el último producto visible
-            items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
-            if items:
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({behavior: 'instant', block: 'end'});",
-                    items[-1]
-                )
-            time.sleep(1)
-
-            # Estrategia 2: si hay contenedor scroll, scrollearlo directamente
-            if scroll_container:
-                try:
-                    self.driver.execute_script(
-                        "arguments[0].scrollTop = arguments[0].scrollHeight;",
-                        scroll_container
-                    )
-                except Exception:
-                    pass
-            else:
-                # Fallback: window scroll + keyboard End
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
-
-            # Estrategia 3: simular tecla End / Page Down vía JS en el body
+            # Scroll: scrollIntoView en el último producto (JS puro)
             try:
-                self.driver.execute_script("""
-                    document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'End', code: 'End', bubbles: true}));
-                """)
+                self.driver.execute_script(scroll_last_js)
             except Exception:
                 pass
+            time.sleep(1)
+
+            # Scroll: contenedor padre overflow o window fallback
+            try:
+                sc_info = self.driver.execute_script(scroll_container_js)
+            except Exception:
+                sc_info = "error"
             time.sleep(1.5)
 
-            # Cada 4 scrolls: subir un poco y volver a bajar para forzar lazy load
+            # Cada 4 scrolls: bounce (subir a mitad, esperar, volver a bajar)
             if i % 4 == 3:
-                if items:
-                    mid = len(items) // 2
-                    self.driver.execute_script(
-                        "arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});",
-                        items[mid]
-                    )
-                    time.sleep(0.5)
-                    self.driver.execute_script(
-                        "arguments[0].scrollIntoView({behavior: 'instant', block: 'end'});",
-                        items[-1]
-                    )
-                    time.sleep(1)
-
-            _collect()
-            new_total = len(seen)
-            dom_links = len(self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]'))
-
-            # Debug info sobre scroll container
-            sc_info = ""
-            if scroll_container:
                 try:
-                    sc_info = self.driver.execute_script(
-                        "return 'scrollTop=' + arguments[0].scrollTop + ' scrollH=' + arguments[0].scrollHeight + ' clientH=' + arguments[0].clientHeight;",
-                        scroll_container
-                    )
+                    self.driver.execute_script(scroll_bounce_js)
+                    time.sleep(0.5)
+                    self.driver.execute_script(scroll_last_js)
                 except Exception:
-                    sc_info = "error"
+                    pass
+                time.sleep(1)
 
-            line = f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) | DOM_links={dom_links} | {sc_info}"
+            _collect_from_js()
+            new_total = len(seen)
+
+            line = f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) | {sc_info}"
             log.info(line)
 
             if new_total > prev_total:
