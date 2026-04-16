@@ -123,11 +123,94 @@ class FacebookMarketplaceScraper:
         self.driver.refresh()
         time.sleep(2)
 
+    def _resolver_modal_perfil(self, debug):
+        """Cierra o confirma el modal de selección de perfil si Facebook lo muestra."""
+        modal_js = """
+        function hasVisible(el) {
+            if (!el) return false;
+            var style = window.getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+        }
+        var dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter(hasVisible);
+        var target = null;
+        for (var i = 0; i < dialogs.length; i++) {
+            var txt = (dialogs[i].innerText || '').trim();
+            if (/continue as|usar otro perfil|use another profile|profile/i.test(txt)) {
+                target = dialogs[i];
+                break;
+            }
+        }
+        if (!target) {
+            return {handled: false, reason: 'no_profile_modal'};
+        }
+
+        var buttons = Array.from(target.querySelectorAll('[role="button"], button, div[tabindex="0"]'));
+        for (var j = 0; j < buttons.length; j++) {
+            var text = (buttons[j].innerText || buttons[j].getAttribute('aria-label') || '').trim();
+            if (/continue as/i.test(text)) {
+                buttons[j].click();
+                return {handled: true, action: 'continue', text: text};
+            }
+        }
+        for (var k = 0; k < buttons.length; k++) {
+            var closeText = (buttons[k].innerText || buttons[k].getAttribute('aria-label') || '').trim();
+            if (/cerrar|close/i.test(closeText)) {
+                buttons[k].click();
+                return {handled: true, action: 'close', text: closeText};
+            }
+        }
+        return {handled: false, reason: 'modal_without_known_buttons', text: (target.innerText || '').slice(0, 200)};
+        """
+        try:
+            modal_info = self.driver.execute_script(modal_js)
+        except Exception as ex:
+            log.warning(f"No se pudo inspeccionar modal de perfil: {ex}")
+            return
+
+        if modal_info.get('handled'):
+            action = modal_info.get('action', 'unknown')
+            text = modal_info.get('text', '')
+            debug.append(f"Modal perfil resuelto: action={action} | {text}")
+            log.info(f"Modal perfil resuelto: action={action} | {text}")
+            time.sleep(3)
+        elif modal_info.get('reason') != 'no_profile_modal':
+            debug.append(f"Modal perfil detectado pero no resuelto: {modal_info.get('reason')}")
+            log.warning(f"Modal perfil detectado pero no resuelto: {modal_info}")
+
     def scrape_products(self):
         """Scrapea productos. Retorna (products, debug_lines)."""
         debug = []  # líneas de debug para mostrar en la UI
         self.driver.get(PROFILE_URL)
         time.sleep(3)
+        self._resolver_modal_perfil(debug)
+
+        # Espera corta por si Facebook tarda en hidratar el HTML tras un reinicio del servidor.
+        page_diag_js = """
+        function countIn(root) {
+            if (!root || !root.querySelectorAll) return 0;
+            return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
+        }
+        var dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
+        var main = document.querySelector('[role="main"]');
+        var txt = (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 3000);
+        return {
+            url: location.href,
+            docItems: countIn(document),
+            dialogItems: countIn(dialog),
+            mainItems: countIn(main),
+            hasLoginWord: /log in|iniciar sesi[oó]n|entra|login/i.test(txt),
+            hasMarketplaceWord: /marketplace|publicaciones|disponibles y en stock|ordenar por/i.test(txt),
+            textSample: txt.slice(0, 600)
+        };
+        """
+        for _ in range(6):
+            try:
+                diag = self.driver.execute_script(page_diag_js)
+            except Exception:
+                diag = {}
+            if (diag.get('docItems', 0) or diag.get('dialogItems', 0) or diag.get('mainItems', 0)):
+                break
+            time.sleep(2)
 
         current_url = self.driver.current_url
         page_title = self.driver.title
@@ -139,13 +222,24 @@ class FacebookMarketplaceScraper:
         if (
             'login' in current_url or
             'Log in to Facebook' in page_title or
-            self.driver.find_elements(By.NAME, 'login')
+            self.driver.find_elements(By.NAME, 'login') or
+            diag.get('hasLoginWord')
         ):
             msg = "ALERTA: Facebook pide login. Cookies caducadas."
             debug.append(msg)
             log.error(msg)
             self.driver.save_screenshot('error.png')
             return [], debug
+
+        debug.append(
+            "Diag inicial: "
+            f"docItems={diag.get('docItems', 0)} | "
+            f"dialogItems={diag.get('dialogItems', 0)} | "
+            f"mainItems={diag.get('mainItems', 0)} | "
+            f"marketplaceText={diag.get('hasMarketplaceWord')}"
+        )
+        if diag.get('textSample'):
+            log.info(f"Text sample inicial: {diag.get('textSample')[:300]}")
 
         debug.append("Sesión OK. Iniciando scroll...")
         log.info("Sesión OK, iniciando scroll")
@@ -162,10 +256,29 @@ class FacebookMarketplaceScraper:
         # JS que recolecta SOLO productos del perfil, excluyendo "Sugerencias de hoy"
         # y priorizando la capa modal del perfil de Marketplace.
         collect_js = """
-        function getRoot() {
-            return document.querySelector('[role="dialog"][aria-modal="true"]') || document;
+        function countItems(root) {
+            if (!root || !root.querySelectorAll) return 0;
+            return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
         }
-        var root = getRoot();
+        function getRoot() {
+            var candidates = [
+                {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')},
+                {name: 'main', el: document.querySelector('[role="main"]')},
+                {name: 'document', el: document}
+            ];
+            var best = candidates[2];
+            var bestCount = -1;
+            candidates.forEach(function(c) {
+                var count = countItems(c.el);
+                if (count > bestCount) {
+                    best = c;
+                    bestCount = count;
+                }
+            });
+            return best;
+        }
+        var selected = getRoot();
+        var root = selected.el;
         var result = [];
         var sugContainers = [];
         var spans = root.querySelectorAll('span');
@@ -191,21 +304,45 @@ class FacebookMarketplaceScraper:
             if (dominated) return;
             var href = a.getAttribute('href') || '';
             var label = a.getAttribute('aria-label') || '';
-            if (href && label) {
-                result.push({href: href, label: label});
+            var text = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!label && text) {
+                label = text;
+            }
+            if (href) {
+                result.push({href: href, label: label, rawText: text});
             }
         });
         return {
+            rootName: selected.name,
             rootTag: root === document ? 'document' : root.tagName,
             rootClass: root === document ? '' : (root.className || ''),
+            itemCount: items.length,
             items: result
         };
         """
 
         # JS de scroll centrado en el dialog real del perfil.
         scroll_all_js = """
+        function countItems(root) {
+            if (!root || !root.querySelectorAll) return 0;
+            return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
+        }
         function getRoot() {
-            return document.querySelector('[role="dialog"][aria-modal="true"]') || document;
+            var candidates = [
+                {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')},
+                {name: 'main', el: document.querySelector('[role="main"]')},
+                {name: 'document', el: document}
+            ];
+            var best = candidates[2];
+            var bestCount = -1;
+            candidates.forEach(function(c) {
+                var count = countItems(c.el);
+                if (count > bestCount) {
+                    best = c;
+                    bestCount = count;
+                }
+            });
+            return best;
         }
         function findScroller(root, items) {
             var candidate = null;
@@ -238,9 +375,11 @@ class FacebookMarketplaceScraper:
             return candidate;
         }
 
-        var root = getRoot();
+        var selected = getRoot();
+        var root = selected.el;
         var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
         var info = {
+            rootName: selected.name,
             rootTag: root === document ? 'document' : root.tagName,
             itemCount: items.length
         };
@@ -271,8 +410,26 @@ class FacebookMarketplaceScraper:
 
         # JS para scroll intermedio dentro del mismo contenedor del dialog.
         scroll_bounce_js = """
+        function countItems(root) {
+            if (!root || !root.querySelectorAll) return 0;
+            return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
+        }
         function getRoot() {
-            return document.querySelector('[role="dialog"][aria-modal="true"]') || document;
+            var candidates = [
+                {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')},
+                {name: 'main', el: document.querySelector('[role="main"]')},
+                {name: 'document', el: document}
+            ];
+            var best = candidates[2];
+            var bestCount = -1;
+            candidates.forEach(function(c) {
+                var count = countItems(c.el);
+                if (count > bestCount) {
+                    best = c;
+                    bestCount = count;
+                }
+            });
+            return best.el;
         }
         var root = getRoot();
         var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
@@ -298,17 +455,21 @@ class FacebookMarketplaceScraper:
                 log.debug(f"  Error en collect_js: {ex}")
                 return
             if raw and raw.get('rootTag'):
-                log.debug(f"  collect_js root={raw.get('rootTag')} class={raw.get('rootClass', '')[:80]}")
+                log.debug(
+                    f"  collect_js root={raw.get('rootName')}/{raw.get('rootTag')} "
+                    f"items={raw.get('itemCount', 0)} class={raw.get('rootClass', '')[:80]}"
+                )
             for item in ((raw or {}).get('items') or []):
                 href = item.get('href', '')
                 label = item.get('label', '')
+                raw_text = item.get('rawText', '')
                 lm = re.search(r'/marketplace/item/(\d+)', href)
                 if not lm:
                     continue
                 lid = lm.group(1)
                 if lid in seen:
                     continue
-                lc = label.replace('\xa0', ' ')
+                lc = (label or '').replace('\xa0', ' ')
                 m = re.match(r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
                 if m:
                     t, p = m.group(1).strip(), '$ ' + m.group(2).strip()
@@ -317,8 +478,20 @@ class FacebookMarketplaceScraper:
                     if m2:
                         t, p = m2.group(1).strip(), 'COP ' + m2.group(2).strip()
                     else:
-                        log.debug(f"  aria-label sin match: {lc[:120]}")
-                        continue
+                        # Fallback: extraer precio/título desde el texto visible del link.
+                        fallback = raw_text.replace('\xa0', ' ')
+                        price_match = re.search(r'(COP\s*[\d.,]+|\$\s*[\d.,]+)', fallback)
+                        if not price_match:
+                            log.debug(f"  sin precio visible: label={lc[:120]} raw={fallback[:120]}")
+                            continue
+                        p = price_match.group(1).strip()
+                        t = fallback[:price_match.start()].strip(' ,|-')
+                        if not t:
+                            after = fallback[price_match.end():].strip(' ,|-')
+                            t = after.split(' Barrancabermeja')[0].strip(' ,|-') if after else ''
+                        if not t:
+                            log.debug(f"  fallback sin titulo: label={lc[:120]} raw={fallback[:120]}")
+                            continue
                 if t:
                     seen[lid] = {'title': t, 'price': p}
                     log.debug(f"  NUEVO: [{lid}] {t} | {p}")
@@ -362,6 +535,21 @@ class FacebookMarketplaceScraper:
 
         debug.append(f"TOTAL RECOLECTADOS: {len(seen)}")
         log.info(f"Scroll finalizado. Total={len(seen)}")
+
+        if not seen:
+            try:
+                final_diag = self.driver.execute_script(page_diag_js)
+            except Exception:
+                final_diag = {}
+            debug.append(
+                "Diag final sin resultados: "
+                f"docItems={final_diag.get('docItems', 0)} | "
+                f"dialogItems={final_diag.get('dialogItems', 0)} | "
+                f"mainItems={final_diag.get('mainItems', 0)} | "
+                f"marketplaceText={final_diag.get('hasMarketplaceWord')} | "
+                f"loginText={final_diag.get('hasLoginWord')}"
+            )
+            log.warning(f"Scraping terminó en 0 productos. Diag={final_diag}")
 
         # Screenshot y HTML
         self.driver.save_screenshot('debug_fb.png')
