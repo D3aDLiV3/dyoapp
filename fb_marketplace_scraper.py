@@ -28,31 +28,40 @@ log = logging.getLogger('fb_scraper')
 
 class FacebookMarketplaceScraper:
     def __init__(self, headless=True, driver_path=None):
-        runtime_root = Path(__file__).resolve().parent / ".selenium-tmp"
-        runtime_root.mkdir(exist_ok=True)
+        # --- Directorio de trabajo para Chrome ---
+        # Usar /tmp en Linux (siempre escribible, compatible con snap Chromium)
+        # o .selenium-tmp en Windows/fallback
+        if os.name != 'nt' and os.path.isdir('/tmp'):
+            runtime_root = Path('/tmp/selenium-dyo')
+        else:
+            runtime_root = Path(__file__).resolve().parent / ".selenium-tmp"
+        runtime_root.mkdir(parents=True, exist_ok=True)
 
-        # Limpieza best-effort de perfiles temporales viejos que hayan quedado.
-        for old_dir in runtime_root.glob("chrome-profile-*"):
+        # Matar procesos Chrome/chromedriver zombie que puedan bloquear el perfil
+        if os.name != 'nt':
             try:
-                shutil.rmtree(old_dir, ignore_errors=True)
+                os.system("pkill -f 'chrome-profile-dyo' 2>/dev/null || true")
+                time.sleep(0.5)
             except Exception:
                 pass
 
-        self._profile_dir = Path(tempfile.mkdtemp(prefix="chrome-profile-", dir=str(runtime_root)))
-
-        # Pre-crear la subcarpeta "Default" que Chrome necesita
+        # Usar perfil FIJO (no aleatorio) para evitar acumulación de basura
+        self._profile_dir = runtime_root / "chrome-profile-dyo"
+        if self._profile_dir.exists():
+            shutil.rmtree(self._profile_dir, ignore_errors=True)
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
         (self._profile_dir / "Default").mkdir(exist_ok=True)
 
-        # Redirigir TODAS las variables de entorno que Chrome/chromedriver puedan usar
-        env_override = os.environ.copy()
+        log.info(f"runtime_root={runtime_root}  profile={self._profile_dir}")
+        log.info(f"profile exists={self._profile_dir.exists()}  Default exists={(self._profile_dir / 'Default').exists()}")
+
+        # Variables de entorno para Chrome y chromedriver
         for env_name in ("TMPDIR", "TMP", "TEMP"):
-            env_override[env_name] = str(runtime_root)
             os.environ[env_name] = str(runtime_root)
-        env_override["HOME"] = str(runtime_root)
-        env_override["XDG_CONFIG_HOME"] = str(runtime_root / "xdg-config")
-        env_override["XDG_CACHE_HOME"] = str(runtime_root / "xdg-cache")
-        env_override["XDG_DATA_HOME"] = str(runtime_root / "xdg-data")
         os.environ["HOME"] = str(runtime_root)
+        os.environ["XDG_CONFIG_HOME"] = str(runtime_root / "xdg-config")
+        os.environ["XDG_CACHE_HOME"] = str(runtime_root / "xdg-cache")
+        os.environ["XDG_DATA_HOME"] = str(runtime_root / "xdg-data")
         tempfile.tempdir = str(runtime_root)
 
         chrome_options = Options()
@@ -68,26 +77,32 @@ class FacebookMarketplaceScraper:
         chrome_options.add_argument('--disable-crash-reporter')
         chrome_options.add_argument('--disable-background-networking')
         chrome_options.add_argument(f'user-agent={USER_AGENT}')
+
+        # Detectar binario de Chrome/Chromium
         chromium_path = shutil.which('chromium-browser') or shutil.which('chromium')
         chrome_path = shutil.which('google-chrome')
-        if chromium_path:
-            chrome_options.binary_location = chromium_path
-        elif chrome_path:
-            chrome_options.binary_location = chrome_path
+        binary = chromium_path or chrome_path
+        if binary:
+            chrome_options.binary_location = binary
+            # Detectar si es snap (causa problemas de escritura)
+            if '/snap/' in str(Path(binary).resolve()):
+                log.warning(f"SNAP Chromium detectado: {binary} → puede causar problemas de perfil")
+        log.info(f"Chrome binary: {binary}")
 
-        # Pasar entorno limpio al proceso de chromedriver
-        service_kwargs = {}
+        # Lanzar chromedriver con entorno controlado
+        svc_args = {'env': os.environ.copy()}
         if driver_path:
-            service_kwargs['executable_path'] = driver_path
+            svc_args['executable_path'] = driver_path
         try:
-            svc = Service(**service_kwargs, env=env_override)
+            svc = Service(**svc_args)
             self.driver = webdriver.Chrome(service=svc, options=chrome_options)
         except TypeError:
-            # Fallback: versiones viejas de Selenium sin env en Service
+            log.warning("Service(env=) no soportado, usando fallback sin env")
             if driver_path:
                 self.driver = webdriver.Chrome(executable_path=driver_path, options=chrome_options)
             else:
                 self.driver = webdriver.Chrome(options=chrome_options)
+        log.info("Chrome iniciado correctamente")
         self._load_cookies(COOKIES_FILE)
 
     def _load_cookies(self, cookies_path):
