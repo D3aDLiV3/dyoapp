@@ -66,9 +66,34 @@ def main():
     if is_login_page(driver):
         print("¡ALERTA! Facebook pide login. Las cookies caducaron o son inválidas.")
         driver.save_screenshot('error.png')
+        driver.quit()
+        return
     else:
-        print("Sesión iniciada correctamente. Puedes scrapear el Marketplace.")
+        print("Sesión iniciada correctamente. Scrapeando productos...")
         driver.save_screenshot('marketplace_ok.png')
+
+    # --- SCRAPING DE PRODUCTOS ---
+    # Scroll para cargar productos
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    for _ in range(10):
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        if new_height == last_height:
+            break
+        last_height = new_height
+    products = []
+    items = driver.find_elements(By.XPATH, '//div[contains(@aria-label, "Marketplace Listing")]')
+    for item in items:
+        try:
+            title = item.find_element(By.XPATH, './/span[contains(@dir, "auto")]').text
+            price = item.find_element(By.XPATH, './/span[contains(text(), "$") or contains(text(), "₡") or contains(text(), "€") or contains(text(), "₲") or contains(text(), "₱") or contains(text(), "₦") or contains(text(), "R$") or contains(text(), "S/") or contains(text(), "Q") or contains(text(), "RD$") or contains(text(), "Bs.") or contains(text(), "L") or contains(text(), "C$") or contains(text(), "₡") or contains(text(), "₲") or contains(text(), "₱") or contains(text(), "₦") or contains(text(), "R$") or contains(text(), "S/") or contains(text(), "Q") or contains(text(), "RD$") or contains(text(), "Bs.") or contains(text(), "L") or contains(text(), "C$")]').text
+            products.append({'title': title, 'price': price})
+        except Exception:
+            continue
+    print(f"Productos extraídos: {len(products)}")
+    for p in products:
+        print(p)
     driver.quit()
 
 if __name__ == "__main__":
