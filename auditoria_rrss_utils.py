@@ -29,7 +29,9 @@ def discrepancias_woo_vs_fb(resultados_comparacion, fb_products):
     """
     productos_woo_discrepancia = []
     for p in resultados_comparacion:
-        if p.get('Estado') and p['Estado'] != 'OK':
+        estado = p.get('Estado', '')
+        # Solo mostrar discrepancias reales (Error de Precio, No Publicado)
+        if estado and not estado.startswith('OK'):
             productos_woo_discrepancia.append(p)
 
     # Comparar FB vs WooCommerce: productos de FB que no matchean con ninguno de Woo

@@ -80,8 +80,13 @@ def comparar_facebook_vs_woo(fb_products, woo_products, stock_local):
                 precio_fb = float(fb['price'].replace('$', '').replace('COP', '').replace('.', '').replace(',', '').strip())
             except Exception:
                 precio_fb = fb['price']
+
+            # Determinar estado según precio y calidad del match
             if abs(precio_web - precio_fb) < 0.01:
-                estado = 'OK'
+                if score >= 0.9:
+                    estado = 'OK'
+                else:
+                    estado = f'OK (match ~{int(score*100)}%)'
                 if auditlog.buscar_fecha_discrepancia(nombre, "Error de Precio"):
                     auditlog.registrar_parcheo(nombre, "Error de Precio", detalle=f"Precio corregido a {precio_web}")
             else:
@@ -92,7 +97,7 @@ def comparar_facebook_vs_woo(fb_products, woo_products, stock_local):
                     fecha_detectado = auditlog.buscar_fecha_discrepancia(nombre, "Error de Precio")
         else:
             precio_fb = ''
-            estado = 'Posible Publicación Oculta'
+            estado = 'No Publicado en FB'
             fecha_detectado = auditlog.buscar_fecha_discrepancia(nombre, "Publicación Oculta")
             if not fecha_detectado:
                 auditlog.registrar_evento(nombre, "Publicación Oculta", "detectado")
