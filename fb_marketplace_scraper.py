@@ -18,6 +18,10 @@ class FacebookMarketplaceScraper:
     def scrape_products(self):
         self.driver.get(self.profile_url)
         time.sleep(3)
+        # Guardar screenshot y HTML para depuración
+        self.driver.save_screenshot('debug_fb.png')
+        with open('debug_fb.html', 'w', encoding='utf-8') as f:
+            f.write(self.driver.page_source)
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         while True:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
