@@ -51,10 +51,6 @@ class FacebookMarketplaceScraper:
     def scrape_products(self):
         self.driver.get(PROFILE_URL)
         time.sleep(3)
-        # Guardar screenshot y HTML para depuración
-        self.driver.save_screenshot('debug_fb.png')
-        with open('debug_fb.html', 'w', encoding='utf-8') as f:
-            f.write(self.driver.page_source)
         # Detección de login/bloqueo
         if (
             'login' in self.driver.current_url or
@@ -64,17 +60,22 @@ class FacebookMarketplaceScraper:
             print("¡ALERTA! Facebook pide login. Las cookies caducaron o son inválidas.")
             self.driver.save_screenshot('error.png')
             return []
-        # Scroll para cargar productos
+        # Scroll para cargar productos (más scrolls y espera)
         last_height = self.driver.execute_script("return document.body.scrollHeight")
-        for _ in range(10):  # Máximo 10 scrolls
+        for _ in range(25):  # Máximo 25 scrolls
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+            time.sleep(2.5)
             new_height = self.driver.execute_script("return document.body.scrollHeight")
             if new_height == last_height:
                 break
             last_height = new_height
+        # Guardar screenshot y HTML para depuración después del scroll
+        self.driver.save_screenshot('debug_fb.png')
+        with open('debug_fb.html', 'w', encoding='utf-8') as f:
+            f.write(self.driver.page_source)
         products = []
         items = self.driver.find_elements(By.XPATH, '//div[contains(@aria-label, "Marketplace Listing")]')
+        print(f"DEBUG: Se detectaron {len(items)} items tras el scroll.")
         for item in items:
             try:
                 title = item.find_element(By.XPATH, './/span[contains(@dir, "auto")]').text
