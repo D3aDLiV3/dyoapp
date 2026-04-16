@@ -160,16 +160,20 @@ class FacebookMarketplaceScraper:
         max_stale = 10
 
         # JS que recolecta SOLO productos del perfil, excluyendo "Sugerencias de hoy"
+        # y priorizando la capa modal del perfil de Marketplace.
         collect_js = """
+        function getRoot() {
+            return document.querySelector('[role="dialog"][aria-modal="true"]') || document;
+        }
+        var root = getRoot();
         var result = [];
-        // Encontrar la sección "Sugerencias de hoy" para excluirla
         var sugContainers = [];
-        var spans = document.querySelectorAll('span');
+        var spans = root.querySelectorAll('span');
         for (var i = 0; i < spans.length; i++) {
-            var txt = spans[i].textContent.trim();
+            var txt = (spans[i].textContent || '').trim();
             if (txt === 'Sugerencias de hoy' || txt === "Today's picks") {
                 var container = spans[i];
-                while (container.parentElement && container.parentElement !== document.body) {
+                while (container.parentElement && container.parentElement !== root) {
                     container = container.parentElement;
                     if (container.querySelectorAll('a[href*="/marketplace/item/"]').length >= 3) {
                         sugContainers.push(container);
@@ -178,9 +182,8 @@ class FacebookMarketplaceScraper:
                 }
             }
         }
-        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
         items.forEach(function(a) {
-            // Excluir si está dentro de un contenedor de Sugerencias
             var dominated = false;
             for (var j = 0; j < sugContainers.length; j++) {
                 if (sugContainers[j].contains(a)) { dominated = true; break; }
@@ -192,69 +195,98 @@ class FacebookMarketplaceScraper:
                 result.push({href: href, label: label});
             }
         });
-        return result;
+        return {
+            rootTag: root === document ? 'document' : root.tagName,
+            rootClass: root === document ? '' : (root.className || ''),
+            items: result
+        };
         """
 
-        # JS de scroll agresivo: prueba TODAS las estrategias posibles
-        # Facebook puede scrollear en: document.scrollingElement, role="main",
-        # un div con overflow, o necesitar scrollIntoView.
+        # JS de scroll centrado en el dialog real del perfil.
         scroll_all_js = """
-        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
-        var info = {};
+        function getRoot() {
+            return document.querySelector('[role="dialog"][aria-modal="true"]') || document;
+        }
+        function findScroller(root, items) {
+            var candidate = null;
+            var maxScrollRoom = -1;
+            var nodes = [root].concat(Array.from(root.querySelectorAll('div, section, main')));
+            nodes.forEach(function(el) {
+                if (!el || !el.querySelector) return;
+                if (items.length && !el.contains(items[0]) && el !== root) return;
+                var style = window.getComputedStyle(el);
+                var overflowY = style.overflowY;
+                var scrollRoom = el.scrollHeight - el.clientHeight;
+                if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && scrollRoom > 120) {
+                    if (scrollRoom > maxScrollRoom) {
+                        candidate = el;
+                        maxScrollRoom = scrollRoom;
+                    }
+                }
+            });
+            if (!candidate && items.length) {
+                var el = items[0].parentElement;
+                while (el && el !== root && el !== document.body && el !== document.documentElement) {
+                    var scrollRoom = el.scrollHeight - el.clientHeight;
+                    if (scrollRoom > 120) {
+                        candidate = el;
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+            }
+            return candidate;
+        }
 
-        // 1. scrollIntoView en el último producto (fuerza el viewport a moverlo)
+        var root = getRoot();
+        var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
+        var info = {
+            rootTag: root === document ? 'document' : root.tagName,
+            itemCount: items.length
+        };
+
         if (items.length > 0) {
             items[items.length - 1].scrollIntoView({behavior: 'instant', block: 'end'});
         }
 
-        // 2. Scroll del document.scrollingElement (viewport principal)
-        var se = document.scrollingElement || document.documentElement;
-        var before = se.scrollTop;
-        se.scrollTop = se.scrollHeight;
-        info.scrollingElement = 'before=' + before + ' after=' + se.scrollTop + ' scrollH=' + se.scrollHeight;
-
-        // 3. Scroll de [role="main"] si existe
-        var main = document.querySelector('[role="main"]');
-        if (main && main.scrollHeight > main.clientHeight) {
-            main.scrollTop = main.scrollHeight;
-            info.roleMain = 'scrollTop=' + main.scrollTop + ' scrollH=' + main.scrollHeight;
+        var scroller = findScroller(root, items);
+        if (scroller) {
+            var before = scroller.scrollTop;
+            var step = Math.max(700, Math.floor(scroller.clientHeight * 0.9));
+            scroller.scrollTop = Math.min(scroller.scrollTop + step, scroller.scrollHeight);
+            info.scroller = 'tag=' + scroller.tagName + ' before=' + before + ' after=' + scroller.scrollTop + ' step=' + step + ' scrollH=' + scroller.scrollHeight + ' clientH=' + scroller.clientHeight;
+        } else {
+            var se = document.scrollingElement || document.documentElement;
+            var before = se.scrollTop;
+            se.scrollTop = se.scrollTop + Math.max(700, Math.floor(window.innerHeight * 0.9));
+            info.scroller = 'fallback before=' + before + ' after=' + se.scrollTop + ' scrollH=' + se.scrollHeight + ' clientH=' + se.clientHeight;
         }
 
-        // 4. Buscar TODOS los contenedores con overflow-y entre los ancestros de los productos
-        //    y scrollear cada uno al fondo
-        if (items.length > 0) {
-            var el = items[0];
-            var scrolled = [];
-            while (el && el !== document.body && el !== document.documentElement) {
-                el = el.parentElement;
-                if (!el) break;
-                var style = window.getComputedStyle(el);
-                var ov = style.overflowY;
-                if ((ov === 'scroll' || ov === 'auto' || ov === 'hidden') && el.scrollHeight > el.clientHeight + 10) {
-                    var bef = el.scrollTop;
-                    el.scrollTop = el.scrollHeight;
-                    scrolled.push('tag=' + el.tagName + ' before=' + bef + ' after=' + el.scrollTop + ' sH=' + el.scrollHeight + ' cH=' + el.clientHeight);
-                }
-            }
-            if (scrolled.length > 0) info.ancestors = scrolled.join(' | ');
+        var thumb = root.querySelector('[data-thumb="1"]');
+        if (thumb) {
+            info.thumb = 'h=' + thumb.style.height + ' class=' + (thumb.className || '').slice(0, 80);
         }
-
-        // 5. También hacer window.scrollTo como fallback final
-        window.scrollTo(0, document.body.scrollHeight);
-
         return JSON.stringify(info);
         """
 
-        # JS para scroll intermedio (subir y volver, simula usuario)
+        # JS para scroll intermedio dentro del mismo contenedor del dialog.
         scroll_bounce_js = """
-        var se = document.scrollingElement || document.documentElement;
-        // Subir a la mitad
-        se.scrollTop = Math.floor(se.scrollHeight / 2);
-        // También scrollIntoView a un producto del medio
-        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        function getRoot() {
+            return document.querySelector('[role="dialog"][aria-modal="true"]') || document;
+        }
+        var root = getRoot();
+        var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
         if (items.length > 1) {
             var mid = Math.floor(items.length / 2);
             items[mid].scrollIntoView({behavior: 'instant', block: 'center'});
+        }
+        var nodes = [root].concat(Array.from(root.querySelectorAll('div, section, main')));
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if ((el.scrollHeight - el.clientHeight) > 120) {
+                el.scrollTop = Math.max(0, Math.floor(el.scrollTop * 0.5));
+                break;
+            }
         }
         """
 
@@ -265,7 +297,9 @@ class FacebookMarketplaceScraper:
             except Exception as ex:
                 log.debug(f"  Error en collect_js: {ex}")
                 return
-            for item in (raw or []):
+            if raw and raw.get('rootTag'):
+                log.debug(f"  collect_js root={raw.get('rootTag')} class={raw.get('rootClass', '')[:80]}")
+            for item in ((raw or {}).get('items') or []):
                 href = item.get('href', '')
                 label = item.get('label', '')
                 lm = re.search(r'/marketplace/item/(\d+)', href)
