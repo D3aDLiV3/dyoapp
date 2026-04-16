@@ -1,4 +1,5 @@
 
+
 import time
 import json
 import shutil
@@ -6,9 +7,12 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+COOKIES_FILE = "cookies.json"
+PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"  # URL fijo del perfil a auditar
+
 class FacebookMarketplaceScraper:
-    def __init__(self, profile_url, cookies_path=None, user_agent=None, headless=True, driver_path=None):
-        self.profile_url = profile_url
+    def __init__(self, headless=True, driver_path=None):
         chrome_options = Options()
         if headless:
             chrome_options.add_argument('--headless')
@@ -16,19 +20,15 @@ class FacebookMarketplaceScraper:
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
-        if user_agent:
-            chrome_options.add_argument(f'user-agent={user_agent}')
+        chrome_options.add_argument(f'user-agent={USER_AGENT}')
         chromium_path = shutil.which('chromium-browser') or shutil.which('chromium')
         chrome_path = shutil.which('google-chrome')
         if chromium_path:
             chrome_options.binary_location = chromium_path
         elif chrome_path:
             chrome_options.binary_location = chrome_path
-        # Inicializa driver
         self.driver = webdriver.Chrome(executable_path=driver_path, options=chrome_options) if driver_path else webdriver.Chrome(options=chrome_options)
-        # Carga cookies si se proveen
-        if cookies_path:
-            self._load_cookies(cookies_path)
+        self._load_cookies(COOKIES_FILE)
 
     def _load_cookies(self, cookies_path):
         self.driver.get("https://www.facebook.com/")
@@ -49,7 +49,7 @@ class FacebookMarketplaceScraper:
         time.sleep(2)
 
     def scrape_products(self):
-        self.driver.get(self.profile_url)
+        self.driver.get(PROFILE_URL)
         time.sleep(3)
         # Guardar screenshot y HTML para depuración
         self.driver.save_screenshot('debug_fb.png')

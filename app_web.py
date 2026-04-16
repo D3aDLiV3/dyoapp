@@ -553,7 +553,6 @@ def pagina_auditoria_rrss():
     st.title("Auditoría RRSS: Facebook Marketplace vs WooCommerce")
     st.info("Este módulo permite comparar los productos publicados en Facebook Marketplace con los de WooCommerce y detectar discrepancias de precio o publicaciones ocultas.")
 
-    url_fb = st.text_input("URL del perfil de Facebook Marketplace", placeholder="https://www.facebook.com/marketplace/profile/...")
     modo_headless = st.checkbox("Headless (oculto)", value=True)
     ejecutar = st.button("Ejecutar verificación", type="primary")
 
@@ -561,20 +560,11 @@ def pagina_auditoria_rrss():
     import auditoria_rrss_snapshot as auditsnap
     import pandas as pd
 
-    if ejecutar and url_fb:
-
-        # Configuración para scraping robusto con cookies y user-agent
-        COOKIES_PATH = "cookies.json"
-        USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    if ejecutar:
         with st.spinner("Ejecutando scraping de Facebook Marketplace..."):
             try:
                 from fb_marketplace_scraper import FacebookMarketplaceScraper
-                scraper = FacebookMarketplaceScraper(
-                    url_fb,
-                    cookies_path=COOKIES_PATH,
-                    user_agent=USER_AGENT,
-                    headless=modo_headless
-                )
+                scraper = FacebookMarketplaceScraper(headless=modo_headless)
                 fb_products = scraper.scrape_products()
                 scraper.close()
             except Exception as e:
