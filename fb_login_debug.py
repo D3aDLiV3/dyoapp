@@ -15,11 +15,22 @@ def save_step(driver, step):
 
 def main():
     chrome_options = Options()
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
-    # chrome_options.add_argument('--headless')  # Quita esto para ver el navegador
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+
+    # Detectar binario de Chromium o Chrome
+    import shutil
+    chromium_path = shutil.which('chromium-browser') or shutil.which('chromium')
+    chrome_path = shutil.which('google-chrome')
+    if chromium_path:
+        chrome_options.binary_location = chromium_path
+    elif chrome_path:
+        chrome_options.binary_location = chrome_path
+    else:
+        raise RuntimeError('No se encontró Chromium ni Google Chrome en el sistema. Instala uno con apt.')
 
     driver = webdriver.Chrome(options=chrome_options)
     driver.get("https://www.facebook.com/login")
