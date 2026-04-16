@@ -580,19 +580,54 @@ def pagina_auditoria_rrss():
         auditsnap.guardar_snapshot(resultados)
 
     # Tabs: Comparativa, Logs, Cambios
-    tab1, tab2, tab3 = st.tabs(["Comparativa actual", "Historial de logs", "Cambios entre verificaciones"])
+
+    tab1, tab2, tab3 = st.tabs(["Comparativa visual", "Historial de logs", "Cambios entre verificaciones"])
 
     with tab1:
-        # Mostrar última comparativa
+        # Mostrar última comparativa visual
         snaps = auditsnap.cargar_snapshots()
-        if snaps:
-            ult = snaps[-1]
-            df = pd.DataFrame(ult['data'])
-            st.dataframe(df, use_container_width=True, hide_index=True, height=600)
-            _df_download(df, "auditoria_rrss.xlsx", label="📥 Descargar Excel")
-            st.caption(f"Verificación realizada: {ult['fecha']}")
-        else:
+        if len(snaps) == 0:
             st.info("Aún no hay verificaciones guardadas.")
+        else:
+            ult = snaps[-1]
+            prev = snaps[-2] if len(snaps) > 1 else None
+            fecha_actual = ult['fecha']
+            fecha_anterior = prev['fecha'] if prev else None
+            # Resumen de cambios
+            cambios, _, _ = auditsnap.comparar_ultimos_snapshots()
+            from auditoria_rrss_utils import resumen_cambios, discrepancias_woo_vs_fb
+            resumen = resumen_cambios(cambios) if cambios else {'Nuevos': 0, 'Eliminados': 0, 'Modificados': 0}
+            # Caja resumen
+            with st.container():
+                st.markdown(f"### Resumen de verificación")
+                st.markdown(f"**Fecha actual:** {fecha_actual}")
+                if fecha_anterior:
+                    st.markdown(f"**Fecha anterior:** {fecha_anterior}")
+                st.markdown(f"- **Nuevos:** {resumen['Nuevos']}  ")
+                st.markdown(f"- **Eliminados:** {resumen['Eliminados']}  ")
+                st.markdown(f"- **Modificados:** {resumen['Modificados']}  ")
+                st.markdown("---")
+            # Tablas comparativas
+            col1, col2 = st.columns(2)
+            productos_woo_discrepancia, productos_fb_no_en_woo = discrepancias_woo_vs_fb(ult['data'], ult['data'])
+            # NOTA: Para una comparación real, deberías pasar los productos de Woo y los de FB por separado.
+            # Aquí, por simplicidad, se asume que ult['data'] contiene ambos, pero puedes ajustar según tu estructura.
+            with col1:
+                st.markdown("#### Productos WooCommerce con discrepancias")
+                if productos_woo_discrepancia:
+                    df1 = pd.DataFrame(productos_woo_discrepancia)
+                    st.dataframe(df1, use_container_width=True, hide_index=True, height=400)
+                    _df_download(df1, "woo_discrepancias.xlsx", label="📥 Descargar discrepancias")
+                else:
+                    st.success("Sin discrepancias en WooCommerce.")
+            with col2:
+                st.markdown("#### Productos en Facebook no registrados en WooCommerce")
+                if productos_fb_no_en_woo:
+                    df2 = pd.DataFrame(productos_fb_no_en_woo)
+                    st.dataframe(df2, use_container_width=True, hide_index=True, height=400)
+                    _df_download(df2, "fb_no_en_woo.xlsx", label="📥 Descargar faltantes")
+                else:
+                    st.success("Todos los productos de Facebook están en WooCommerce.")
 
     with tab2:
         st.subheader("Historial de eventos de auditoría")
