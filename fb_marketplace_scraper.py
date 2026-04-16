@@ -40,6 +40,7 @@ class FacebookMarketplaceScraper:
         self._profile_dir = Path(tempfile.mkdtemp(prefix="chrome-profile-", dir=str(runtime_root)))
         for env_name in ("TMPDIR", "TMP", "TEMP"):
             os.environ[env_name] = str(runtime_root)
+        os.environ["HOME"] = str(runtime_root)
         tempfile.tempdir = str(runtime_root)
 
         chrome_options = Options()
@@ -51,8 +52,7 @@ class FacebookMarketplaceScraper:
         chrome_options.add_argument('--window-size=1920,1080')
         chrome_options.add_argument(f'--user-data-dir={self._profile_dir}')
         chrome_options.add_argument(f'--disk-cache-dir={self._profile_dir / "cache"}')
-        chrome_options.add_argument('--data-path=/tmp/chrome-data')
-        chrome_options.add_argument('--remote-debugging-port=9222')
+        chrome_options.add_argument(f'--data-path={self._profile_dir / "data"}')
         chrome_options.add_argument(f'user-agent={USER_AGENT}')
         chromium_path = shutil.which('chromium-browser') or shutil.which('chromium')
         chrome_path = shutil.which('google-chrome')
