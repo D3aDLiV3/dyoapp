@@ -195,33 +195,62 @@ class FacebookMarketplaceScraper:
         return result;
         """
 
-        # JS que scrollea haciendo scrollIntoView en el último producto
-        scroll_last_js = """
+        # JS de scroll agresivo: prueba TODAS las estrategias posibles
+        # Facebook puede scrollear en: document.scrollingElement, role="main",
+        # un div con overflow, o necesitar scrollIntoView.
+        scroll_all_js = """
         var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        var info = {};
+
+        // 1. scrollIntoView en el último producto (fuerza el viewport a moverlo)
         if (items.length > 0) {
             items[items.length - 1].scrollIntoView({behavior: 'instant', block: 'end'});
         }
-        """
 
-        # JS que scrollea el contenedor padre overflow (si existe)
-        scroll_container_js = """
-        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
-        if (items.length === 0) return 'no_items';
-        var el = items[0].parentElement;
-        while (el && el !== document.body && el !== document.documentElement) {
-            var style = window.getComputedStyle(el);
-            if ((style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight) {
-                el.scrollTop = el.scrollHeight;
-                return 'scrollTop=' + el.scrollTop + ' scrollH=' + el.scrollHeight + ' clientH=' + el.clientHeight;
-            }
-            el = el.parentElement;
+        // 2. Scroll del document.scrollingElement (viewport principal)
+        var se = document.scrollingElement || document.documentElement;
+        var before = se.scrollTop;
+        se.scrollTop = se.scrollHeight;
+        info.scrollingElement = 'before=' + before + ' after=' + se.scrollTop + ' scrollH=' + se.scrollHeight;
+
+        // 3. Scroll de [role="main"] si existe
+        var main = document.querySelector('[role="main"]');
+        if (main && main.scrollHeight > main.clientHeight) {
+            main.scrollTop = main.scrollHeight;
+            info.roleMain = 'scrollTop=' + main.scrollTop + ' scrollH=' + main.scrollHeight;
         }
+
+        // 4. Buscar TODOS los contenedores con overflow-y entre los ancestros de los productos
+        //    y scrollear cada uno al fondo
+        if (items.length > 0) {
+            var el = items[0];
+            var scrolled = [];
+            while (el && el !== document.body && el !== document.documentElement) {
+                el = el.parentElement;
+                if (!el) break;
+                var style = window.getComputedStyle(el);
+                var ov = style.overflowY;
+                if ((ov === 'scroll' || ov === 'auto' || ov === 'hidden') && el.scrollHeight > el.clientHeight + 10) {
+                    var bef = el.scrollTop;
+                    el.scrollTop = el.scrollHeight;
+                    scrolled.push('tag=' + el.tagName + ' before=' + bef + ' after=' + el.scrollTop + ' sH=' + el.scrollHeight + ' cH=' + el.clientHeight);
+                }
+            }
+            if (scrolled.length > 0) info.ancestors = scrolled.join(' | ');
+        }
+
+        // 5. También hacer window.scrollTo como fallback final
         window.scrollTo(0, document.body.scrollHeight);
-        return 'window_fallback';
+
+        return JSON.stringify(info);
         """
 
-        # JS para scroll intermedio (subir a la mitad y volver)
+        # JS para scroll intermedio (subir y volver, simula usuario)
         scroll_bounce_js = """
+        var se = document.scrollingElement || document.documentElement;
+        // Subir a la mitad
+        se.scrollTop = Math.floor(se.scrollHeight / 2);
+        // También scrollIntoView a un producto del medio
         var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
         if (items.length > 1) {
             var mid = Math.floor(items.length / 2);
@@ -264,29 +293,22 @@ class FacebookMarketplaceScraper:
             _collect_from_js()
             prev_total = len(seen)
 
-            # Scroll: scrollIntoView en el último producto (JS puro)
+            # Scroll agresivo: todas las estrategias de una vez
             try:
-                self.driver.execute_script(scroll_last_js)
-            except Exception:
-                pass
-            time.sleep(1)
-
-            # Scroll: contenedor padre overflow o window fallback
-            try:
-                sc_info = self.driver.execute_script(scroll_container_js)
-            except Exception:
-                sc_info = "error"
-            time.sleep(1.5)
+                sc_info = self.driver.execute_script(scroll_all_js)
+            except Exception as ex:
+                sc_info = f"error: {ex}"
+            time.sleep(2)
 
             # Cada 4 scrolls: bounce (subir a mitad, esperar, volver a bajar)
             if i % 4 == 3:
                 try:
                     self.driver.execute_script(scroll_bounce_js)
-                    time.sleep(0.5)
-                    self.driver.execute_script(scroll_last_js)
+                    time.sleep(1)
+                    self.driver.execute_script(scroll_all_js)
                 except Exception:
                     pass
-                time.sleep(1)
+                time.sleep(1.5)
 
             _collect_from_js()
             new_total = len(seen)

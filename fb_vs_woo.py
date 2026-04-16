@@ -18,7 +18,7 @@ def _normalizar(texto):
     return t
 
 
-def _buscar_mejor_match(nombre_woo, fb_map, umbral=0.55):
+def _buscar_mejor_match(nombre_woo, fb_map, umbral=0.65):
     """
     Busca el mejor match en fb_map para un nombre de WooCommerce.
     Primero intenta match exacto, luego substring, luego fuzzy.
@@ -45,7 +45,12 @@ def _buscar_mejor_match(nombre_woo, fb_map, umbral=0.55):
             mejor_fb = fb_val
 
     if mejor_score >= umbral:
-        return mejor_fb, mejor_score
+        # Validación extra: al menos 2 palabras significativas en común
+        palabras_woo = set(w for w in nombre_norm.split() if len(w) > 2)
+        palabras_fb = set(w for w in _normalizar(mejor_fb['title']).split() if len(w) > 2)
+        comunes = palabras_woo & palabras_fb
+        if len(comunes) >= 2:
+            return mejor_fb, mejor_score
 
     return None, 0
 
