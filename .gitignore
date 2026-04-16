@@ -15,6 +15,15 @@ build/
 # ── Base de datos local ───────────────────────────────────────────────────────
 *.db
 *.sqlite3
+*.exe
+
+# ── Artefactos de debug y scraping ────────────────────────────────────────────
+*.log
+debug_*.png
+debug_*.html
+debug_*.txt
+marketplace_ok.png
+error.png
 
 # ── CREDENCIALES — NO subir nunca al repo ─────────────────────────────────────
 config.json
