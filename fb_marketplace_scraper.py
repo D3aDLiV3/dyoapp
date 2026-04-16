@@ -4,13 +4,23 @@ import time
 import json
 import re
 import shutil
+import logging
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 COOKIES_FILE = "cookies.json"
-PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"  # URL fijo del perfil a auditar
+PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"
+
+# Log a archivo para poder revisar en el servidor
+logging.basicConfig(
+    filename='fb_scraper_debug.log',
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)s %(message)s',
+    force=True
+)
+log = logging.getLogger('fb_scraper')
 
 class FacebookMarketplaceScraper:
     def __init__(self, headless=True, driver_path=None):
@@ -50,26 +60,40 @@ class FacebookMarketplaceScraper:
         time.sleep(2)
 
     def scrape_products(self):
+        """Scrapea productos. Retorna (products, debug_lines)."""
+        debug = []  # líneas de debug para mostrar en la UI
         self.driver.get(PROFILE_URL)
         time.sleep(3)
+
+        current_url = self.driver.current_url
+        page_title = self.driver.title
+        debug.append(f"URL: {current_url}")
+        debug.append(f"Título: {page_title}")
+        log.info(f"Navegando a {PROFILE_URL} -> {current_url} | {page_title}")
+
         # Detección de login/bloqueo
         if (
-            'login' in self.driver.current_url or
-            'Log in to Facebook' in self.driver.title or
+            'login' in current_url or
+            'Log in to Facebook' in page_title or
             self.driver.find_elements(By.NAME, 'login')
         ):
-            print("¡ALERTA! Facebook pide login. Las cookies caducaron o son inválidas.")
+            msg = "ALERTA: Facebook pide login. Cookies caducadas."
+            debug.append(msg)
+            log.error(msg)
             self.driver.save_screenshot('error.png')
-            return []
-        # Facebook usa virtual scrolling: solo ~25 productos están en el DOM
-        # a la vez. Hay que recolectar productos DURANTE el scroll.
+            return [], debug
+
+        debug.append("Sesión OK. Iniciando scroll...")
+        log.info("Sesión OK, iniciando scroll")
+
+        # --- Scroll + recolección en tiempo real ---
         seen = {}  # listing_id -> {'title': ..., 'price': ...}
         max_scrolls = 80
         stale_attempts = 0
-        max_stale = 8  # más tolerancia porque FB puede tardar en cargar
+        max_stale = 8
 
-        def _collect_visible():
-            """Recolecta productos visibles en el DOM actual al dict seen."""
+        def _collect():
+            """Lee productos visibles en el DOM y los acumula en seen."""
             items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
             for item in items:
                 try:
@@ -92,41 +116,66 @@ class FacebookMarketplaceScraper:
                         if m2:
                             t, p = m2.group(1).strip(), 'COP ' + m2.group(2).strip()
                         else:
+                            log.debug(f"  aria-label sin match: {lc[:120]}")
                             continue
                     if t:
                         seen[lid] = {'title': t, 'price': p}
-                except Exception:
+                        log.debug(f"  NUEVO: [{lid}] {t} | {p}")
+                except Exception as ex:
+                    log.debug(f"  Error leyendo item: {ex}")
                     continue
 
         for i in range(max_scrolls):
-            _collect_visible()
+            _collect()
             prev_total = len(seen)
-            # Scroll hacia abajo
+
+            # Obtener altura antes del scroll
+            h_before = self.driver.execute_script("return document.body.scrollHeight")
+            # Scroll abajo
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
-            # Cada 3 scrolls, subir un poco y volver a bajar (trigger lazy load)
+
+            # Trucos para forzar lazy load
             if i % 3 == 2:
-                self.driver.execute_script("window.scrollBy(0, -600);")
+                self.driver.execute_script("window.scrollBy(0, -800);")
                 time.sleep(0.5)
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1.5)
-            _collect_visible()
+
+            h_after = self.driver.execute_script("return document.body.scrollHeight")
+            _collect()
             new_total = len(seen)
+            dom_links = len(self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]'))
+
+            line = f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) | DOM_links={dom_links} | height={h_before}->{h_after}"
+            log.info(line)
+
             if new_total > prev_total:
                 stale_attempts = 0
-                print(f"DEBUG scroll {i+1}: {new_total} productos acumulados (+{new_total - prev_total})")
+                debug.append(line)
             else:
                 stale_attempts += 1
                 if stale_attempts >= max_stale:
-                    print(f"DEBUG scroll {i+1}: Sin nuevos productos tras {max_stale} scrolls. Total: {new_total}")
+                    debug.append(f"Scroll {i+1}: DETENIDO tras {max_stale} scrolls sin cambios. Total={new_total}")
+                    log.info(f"Detenido en scroll {i+1} tras {max_stale} stale. Total={new_total}")
                     break
-        print(f"DEBUG: Scroll finalizado. Total productos recolectados: {len(seen)}")
-        # Guardar screenshot y HTML para depuración
+
+        debug.append(f"TOTAL RECOLECTADOS: {len(seen)}")
+        log.info(f"Scroll finalizado. Total={len(seen)}")
+
+        # Screenshot y HTML
         self.driver.save_screenshot('debug_fb.png')
         with open('debug_fb.html', 'w', encoding='utf-8') as f:
             f.write(self.driver.page_source)
+
+        # Guardar lista de productos a archivo para inspección
+        with open('debug_productos_fb.txt', 'w', encoding='utf-8') as f:
+            for lid, prod in seen.items():
+                f.write(f"[{lid}] {prod['title']} | {prod['price']}\n")
+        debug.append(f"Archivos debug: debug_fb.png, debug_fb.html, debug_productos_fb.txt, fb_scraper_debug.log")
+
         products = list(seen.values())
-        return products
+        return products, debug
 
     def close(self):
         self.driver.quit()

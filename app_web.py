@@ -565,13 +565,25 @@ def pagina_auditoria_rrss():
             try:
                 from fb_marketplace_scraper import FacebookMarketplaceScraper
                 scraper = FacebookMarketplaceScraper(headless=modo_headless)
-                fb_products = scraper.scrape_products()
+                fb_products, debug_lines = scraper.scrape_products()
                 scraper.close()
             except Exception as e:
                 st.error(f"Error al scrapear Facebook: {e}")
                 return
 
         st.success(f"Productos extraídos de Facebook: {len(fb_products)}")
+
+        # Mostrar log de debug del scraping
+        with st.expander("🔍 Debug del scraping (click para ver)", expanded=True):
+            for dl in debug_lines:
+                st.text(dl)
+            if fb_products:
+                st.markdown("---")
+                st.markdown("**Primeros 10 productos extraídos:**")
+                for p in fb_products[:10]:
+                    st.text(f"  • {p['title']} | {p['price']}")
+                if len(fb_products) > 10:
+                    st.text(f"  ... y {len(fb_products) - 10} más")
         woo_products = _cargar_woo_cache()
         stock_local = db.stock_local_por_producto()
         resultados = fb_vs_woo.comparar_facebook_vs_woo(fb_products, woo_products, stock_local)
