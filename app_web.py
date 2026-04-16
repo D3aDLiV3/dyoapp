@@ -540,10 +540,62 @@ with st.sidebar:
             "\U0001f4ca  Inventario",
             "\U0001f3f7  Etiquetas",
             "\U0001f4c8  Finanzas",
+            "\U0001f426  Auditoría RRSS",
         ],
         key="pagina_actual",
         label_visibility="collapsed",
     )
+# ═════════════════════════════════════════════════════════════════════════════
+#  MÓDULO: AUDITORÍA RRSS
+# ═════════════════════════════════════════════════════════════════════════════
+def pagina_auditoria_rrss():
+    import fb_vs_woo
+    st.title("Auditoría RRSS: Facebook Marketplace vs WooCommerce")
+    st.info("Este módulo permite comparar los productos publicados en Facebook Marketplace con los de WooCommerce y detectar discrepancias de precio o publicaciones ocultas.")
+
+    url_fb = st.text_input("URL del perfil de Facebook Marketplace", placeholder="https://www.facebook.com/marketplace/profile/...")
+    modo_headless = st.checkbox("Headless (oculto)", value=True)
+    ejecutar = st.button("Ejecutar verificación", type="primary")
+
+    if ejecutar and url_fb:
+        with st.spinner("Ejecutando scraping de Facebook Marketplace..."):
+            try:
+                from fb_marketplace_scraper import FacebookMarketplaceScraper
+                scraper = FacebookMarketplaceScraper(url_fb, headless=modo_headless)
+                fb_products = scraper.scrape_products()
+                scraper.close()
+            except Exception as e:
+                st.error(f"Error al scrapear Facebook: {e}")
+                return
+
+        st.success(f"Productos extraídos de Facebook: {len(fb_products)}")
+        woo_products = _cargar_woo_cache()
+        stock_local = db.stock_local_por_producto()
+        resultados = fb_vs_woo.comparar_facebook_vs_woo(fb_products, woo_products, stock_local)
+        if resultados:
+            import pandas as pd
+            df = pd.DataFrame(resultados)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=600)
+            _df_download(df, "auditoria_rrss.xlsx", label="📥 Descargar Excel")
+        else:
+            st.warning("No se encontraron productos para comparar.")
+    elif ejecutar:
+        st.warning("Debes ingresar la URL del perfil de Facebook Marketplace.")
+
+    # Mostrar logs de auditoría
+    import auditoria_rrss_log as auditlog
+    st.markdown("---")
+    st.subheader("Historial de eventos de auditoría")
+    logs = auditlog.cargar_log()
+    if logs:
+        import pandas as pd
+        df_log = pd.DataFrame(logs)
+        df_log = df_log[["fecha", "producto", "tipo", "estado", "detalle"]]
+        df_log.columns = ["Fecha", "Producto", "Tipo", "Estado", "Detalle"]
+        st.dataframe(df_log, use_container_width=True, hide_index=True, height=350)
+        _df_download(df_log, "auditoria_rrss_log.xlsx", label="📥 Descargar log")
+    else:
+        st.info("No hay eventos registrados en el log de auditoría.")
 
     if not _nav_mini:
         st.markdown("---")
@@ -2658,3 +2710,5 @@ elif PAGINA == "\U0001f3f7  Etiquetas":
     pagina_etiquetas()
 elif PAGINA == "\U0001f4c8  Finanzas":
     pagina_finanzas()
+elif PAGINA == "\U0001f426  Auditoría RRSS":
+    pagina_auditoria_rrss()
