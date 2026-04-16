@@ -61,15 +61,32 @@ class FacebookMarketplaceScraper:
             print("¡ALERTA! Facebook pide login. Las cookies caducaron o son inválidas.")
             self.driver.save_screenshot('error.png')
             return []
-        # Scroll para cargar productos (más scrolls y espera)
-        last_height = self.driver.execute_script("return document.body.scrollHeight")
-        for _ in range(25):  # Máximo 25 scrolls
+        # Scroll agresivo para cargar TODOS los productos
+        max_scrolls = 80
+        stale_attempts = 0      # cuántos scrolls sin nuevos productos
+        max_stale = 5           # parar después de 5 scrolls sin productos nuevos
+        prev_count = 0
+        for i in range(max_scrolls):
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2.5)
-            new_height = self.driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
+            time.sleep(2)
+            # Cada 3 scrolls, subir un poco y volver a bajar (trigger lazy load)
+            if i % 3 == 2:
+                self.driver.execute_script("window.scrollBy(0, -600);")
+                time.sleep(0.5)
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1.5)
+            # Contar productos actuales en el DOM
+            cur_count = len(self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]'))
+            if cur_count > prev_count:
+                stale_attempts = 0
+                prev_count = cur_count
+                print(f"DEBUG scroll {i+1}: {cur_count} productos detectados")
+            else:
+                stale_attempts += 1
+                if stale_attempts >= max_stale:
+                    print(f"DEBUG scroll {i+1}: Sin nuevos productos tras {max_stale} intentos. Total: {cur_count}")
+                    break
+        print(f"DEBUG: Scroll finalizado. Productos en DOM: {prev_count}")
         # Guardar screenshot y HTML para depuración después del scroll
         self.driver.save_screenshot('debug_fb.png')
         with open('debug_fb.html', 'w', encoding='utf-8') as f:
