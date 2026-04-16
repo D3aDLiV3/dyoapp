@@ -2,6 +2,7 @@
 
 import time
 import json
+import re
 import shutil
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -74,13 +75,48 @@ class FacebookMarketplaceScraper:
         with open('debug_fb.html', 'w', encoding='utf-8') as f:
             f.write(self.driver.page_source)
         products = []
-        items = self.driver.find_elements(By.XPATH, '//div[contains(@aria-label, "Marketplace Listing")]')
-        print(f"DEBUG: Se detectaron {len(items)} items tras el scroll.")
+        # Los productos en Facebook Marketplace son <a> con href="/marketplace/item/ID"
+        items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
+        print(f"DEBUG: Se detectaron {len(items)} links de productos tras el scroll.")
+        seen = set()
         for item in items:
             try:
-                title = item.find_element(By.XPATH, './/span[contains(@dir, "auto")]').text
-                price = item.find_element(By.XPATH, './/span[contains(text(), "$") or contains(text(), "₡") or contains(text(), "€") or contains(text(), "₲") or contains(text(), "₱") or contains(text(), "₦") or contains(text(), "R$") or contains(text(), "S/") or contains(text(), "Q") or contains(text(), "RD$") or contains(text(), "Bs.") or contains(text(), "L") or contains(text(), "C$") or contains(text(), "₡") or contains(text(), "₲") or contains(text(), "₱") or contains(text(), "₦") or contains(text(), "R$") or contains(text(), "S/") or contains(text(), "Q") or contains(text(), "RD$") or contains(text(), "Bs.") or contains(text(), "L") or contains(text(), "C$")]').text
-                products.append({'title': title, 'price': price})
+                label = item.get_attribute('aria-label')
+                href = item.get_attribute('href') or ''
+                if not label:
+                    continue
+                # Extraer listing ID del href para deduplicar
+                listing_match = re.search(r'/marketplace/item/(\d+)', href)
+                if not listing_match:
+                    continue
+                listing_id = listing_match.group(1)
+                if listing_id in seen:
+                    continue
+                seen.add(listing_id)
+                # Parsear aria-label: "Nombre, $ Precio, Ciudad, listing ID"
+                label_clean = label.replace('\xa0', ' ')
+                match = re.match(
+                    r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$',
+                    label_clean
+                )
+                if match:
+                    title = match.group(1).strip()
+                    price = '$ ' + match.group(2).strip()
+                    location = match.group(3).strip()
+                else:
+                    # Fallback: COP u otro formato
+                    match2 = re.match(
+                        r'^(.*?),\s*COP\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$',
+                        label_clean
+                    )
+                    if match2:
+                        title = match2.group(1).strip()
+                        price = 'COP ' + match2.group(2).strip()
+                        location = match2.group(3).strip()
+                    else:
+                        continue
+                if title:
+                    products.append({'title': title, 'price': price})
             except Exception:
                 continue
         return products

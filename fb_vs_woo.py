@@ -31,7 +31,8 @@ def comparar_facebook_vs_woo(fb_products, woo_products, stock_local):
         fecha_detectado = ""
         if fb:
             try:
-                precio_fb = float(fb['price'].replace('$', '').replace(',', '').strip())
+                # Formato colombiano: $ 80.000 (punto = separador de miles)
+                precio_fb = float(fb['price'].replace('$', '').replace('COP', '').replace('.', '').replace(',', '').strip())
             except Exception:
                 precio_fb = fb['price']
             if abs(precio_web - precio_fb) < 0.01:
