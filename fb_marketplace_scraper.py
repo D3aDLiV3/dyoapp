@@ -87,10 +87,13 @@ class FacebookMarketplaceScraper:
         log.info("Sesión OK, iniciando scroll")
 
         # --- Scroll + recolección en tiempo real ---
+        # Facebook NO scrollea con window.scrollTo (body height=941 fijo).
+        # Usa un div contenedor con overflow. Scrolleamos haciendo
+        # scrollIntoView() en el último producto visible para forzar carga.
         seen = {}  # listing_id -> {'title': ..., 'price': ...}
-        max_scrolls = 80
+        max_scrolls = 100
         stale_attempts = 0
-        max_stale = 8
+        max_stale = 10
 
         def _collect():
             """Lee productos visibles en el DOM y los acumula en seen."""
@@ -125,29 +128,96 @@ class FacebookMarketplaceScraper:
                     log.debug(f"  Error leyendo item: {ex}")
                     continue
 
+        # JS para encontrar el contenedor scrolleable real de Facebook
+        find_scroll_container_js = """
+        var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
+        if (items.length === 0) return null;
+        var el = items[0].parentElement;
+        while (el && el !== document.body && el !== document.documentElement) {
+            var style = window.getComputedStyle(el);
+            if ((style.overflowY === 'scroll' || style.overflowY === 'auto') && el.scrollHeight > el.clientHeight) {
+                return el;
+            }
+            el = el.parentElement;
+        }
+        return null;
+        """
+
+        scroll_container = self.driver.execute_script(find_scroll_container_js)
+        if scroll_container:
+            debug.append("Contenedor scroll detectado (div interno)")
+            log.info("Contenedor scroll interno encontrado")
+        else:
+            debug.append("Sin contenedor scroll especial, usando fallbacks")
+            log.info("No se encontró contenedor scroll interno")
+
         for i in range(max_scrolls):
             _collect()
             prev_total = len(seen)
 
-            # Obtener altura antes del scroll
-            h_before = self.driver.execute_script("return document.body.scrollHeight")
-            # Scroll abajo
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+            # Estrategia 1: scrollIntoView en el último producto visible
+            items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
+            if items:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({behavior: 'instant', block: 'end'});",
+                    items[-1]
+                )
+            time.sleep(1)
 
-            # Trucos para forzar lazy load
-            if i % 3 == 2:
-                self.driver.execute_script("window.scrollBy(0, -800);")
-                time.sleep(0.5)
+            # Estrategia 2: si hay contenedor scroll, scrollearlo directamente
+            if scroll_container:
+                try:
+                    self.driver.execute_script(
+                        "arguments[0].scrollTop = arguments[0].scrollHeight;",
+                        scroll_container
+                    )
+                except Exception:
+                    pass
+            else:
+                # Fallback: window scroll + keyboard End
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1.5)
+            time.sleep(1)
 
-            h_after = self.driver.execute_script("return document.body.scrollHeight")
+            # Estrategia 3: simular tecla End / Page Down vía JS en el body
+            try:
+                self.driver.execute_script("""
+                    document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'End', code: 'End', bubbles: true}));
+                """)
+            except Exception:
+                pass
+            time.sleep(1.5)
+
+            # Cada 4 scrolls: subir un poco y volver a bajar para forzar lazy load
+            if i % 4 == 3:
+                if items:
+                    mid = len(items) // 2
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});",
+                        items[mid]
+                    )
+                    time.sleep(0.5)
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior: 'instant', block: 'end'});",
+                        items[-1]
+                    )
+                    time.sleep(1)
+
             _collect()
             new_total = len(seen)
             dom_links = len(self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]'))
 
-            line = f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) | DOM_links={dom_links} | height={h_before}->{h_after}"
+            # Debug info sobre scroll container
+            sc_info = ""
+            if scroll_container:
+                try:
+                    sc_info = self.driver.execute_script(
+                        "return 'scrollTop=' + arguments[0].scrollTop + ' scrollH=' + arguments[0].scrollHeight + ' clientH=' + arguments[0].clientHeight;",
+                        scroll_container
+                    )
+                except Exception:
+                    sc_info = "error"
+
+            line = f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) | DOM_links={dom_links} | {sc_info}"
             log.info(line)
 
             if new_total > prev_total:
