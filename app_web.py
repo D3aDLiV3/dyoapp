@@ -557,6 +557,10 @@ def pagina_auditoria_rrss():
     modo_headless = st.checkbox("Headless (oculto)", value=True)
     ejecutar = st.button("Ejecutar verificación", type="primary")
 
+    import auditoria_rrss_log as auditlog
+    import auditoria_rrss_snapshot as auditsnap
+    import pandas as pd
+
     if ejecutar and url_fb:
         with st.spinner("Ejecutando scraping de Facebook Marketplace..."):
             try:
@@ -572,30 +576,59 @@ def pagina_auditoria_rrss():
         woo_products = _cargar_woo_cache()
         stock_local = db.stock_local_por_producto()
         resultados = fb_vs_woo.comparar_facebook_vs_woo(fb_products, woo_products, stock_local)
-        if resultados:
-            import pandas as pd
-            df = pd.DataFrame(resultados)
+        # Guardar snapshot de la verificación
+        auditsnap.guardar_snapshot(resultados)
+
+    # Tabs: Comparativa, Logs, Cambios
+    tab1, tab2, tab3 = st.tabs(["Comparativa actual", "Historial de logs", "Cambios entre verificaciones"])
+
+    with tab1:
+        # Mostrar última comparativa
+        snaps = auditsnap.cargar_snapshots()
+        if snaps:
+            ult = snaps[-1]
+            df = pd.DataFrame(ult['data'])
             st.dataframe(df, use_container_width=True, hide_index=True, height=600)
             _df_download(df, "auditoria_rrss.xlsx", label="📥 Descargar Excel")
+            st.caption(f"Verificación realizada: {ult['fecha']}")
         else:
-            st.warning("No se encontraron productos para comparar.")
-    elif ejecutar:
-        st.warning("Debes ingresar la URL del perfil de Facebook Marketplace.")
+            st.info("Aún no hay verificaciones guardadas.")
 
-    # Mostrar logs de auditoría
-    import auditoria_rrss_log as auditlog
-    st.markdown("---")
-    st.subheader("Historial de eventos de auditoría")
-    logs = auditlog.cargar_log()
-    if logs:
-        import pandas as pd
-        df_log = pd.DataFrame(logs)
-        df_log = df_log[["fecha", "producto", "tipo", "estado", "detalle"]]
-        df_log.columns = ["Fecha", "Producto", "Tipo", "Estado", "Detalle"]
-        st.dataframe(df_log, use_container_width=True, hide_index=True, height=350)
-        _df_download(df_log, "auditoria_rrss_log.xlsx", label="📥 Descargar log")
-    else:
-        st.info("No hay eventos registrados en el log de auditoría.")
+    with tab2:
+        st.subheader("Historial de eventos de auditoría")
+        logs = auditlog.cargar_log()
+        if logs:
+            df_log = pd.DataFrame(logs)
+            df_log = df_log[["fecha", "producto", "tipo", "estado", "detalle"]]
+            df_log.columns = ["Fecha", "Producto", "Tipo", "Estado", "Detalle"]
+            st.dataframe(df_log, use_container_width=True, hide_index=True, height=350)
+            _df_download(df_log, "auditoria_rrss_log.xlsx", label="📥 Descargar log")
+        else:
+            st.info("No hay eventos registrados en el log de auditoría.")
+
+    with tab3:
+        st.subheader("Cambios entre las dos últimas verificaciones")
+        cambios, fecha_prev, fecha_curr = auditsnap.comparar_ultimos_snapshots()
+        if cambios:
+            rows = []
+            for c in cambios:
+                if c['Cambio'] == 'Modificado':
+                    detalle = ", ".join([f"{k}: {v['Antes']} → {v['Despues']}" for k, v in c['Detalle'].items()])
+                else:
+                    detalle = ""
+                rows.append({
+                    "Producto": c['Producto'],
+                    "Cambio": c['Cambio'],
+                    "Detalle": detalle,
+                    "Antes": c.get('Antes', {}),
+                    "Despues": c.get('Despues', {})
+                })
+            df_c = pd.DataFrame(rows)
+            st.dataframe(df_c[["Producto", "Cambio", "Detalle"]], use_container_width=True, hide_index=True, height=400)
+            _df_download(df_c, "auditoria_rrss_cambios.xlsx", label="📥 Descargar cambios")
+            st.caption(f"Comparando: {fecha_prev} → {fecha_curr}")
+        else:
+            st.info("No hay suficientes verificaciones para comparar cambios.")
 
     if not _nav_mini:
         st.markdown("---")
