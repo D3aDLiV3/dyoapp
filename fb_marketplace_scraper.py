@@ -61,12 +61,47 @@ class FacebookMarketplaceScraper:
             print("¡ALERTA! Facebook pide login. Las cookies caducaron o son inválidas.")
             self.driver.save_screenshot('error.png')
             return []
-        # Scroll agresivo para cargar TODOS los productos
+        # Facebook usa virtual scrolling: solo ~25 productos están en el DOM
+        # a la vez. Hay que recolectar productos DURANTE el scroll.
+        seen = {}  # listing_id -> {'title': ..., 'price': ...}
         max_scrolls = 80
-        stale_attempts = 0      # cuántos scrolls sin nuevos productos
-        max_stale = 5           # parar después de 5 scrolls sin productos nuevos
-        prev_count = 0
+        stale_attempts = 0
+        max_stale = 8  # más tolerancia porque FB puede tardar en cargar
+
+        def _collect_visible():
+            """Recolecta productos visibles en el DOM actual al dict seen."""
+            items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
+            for item in items:
+                try:
+                    href = item.get_attribute('href') or ''
+                    label = item.get_attribute('aria-label')
+                    if not label or not href:
+                        continue
+                    lm = re.search(r'/marketplace/item/(\d+)', href)
+                    if not lm:
+                        continue
+                    lid = lm.group(1)
+                    if lid in seen:
+                        continue
+                    lc = label.replace('\xa0', ' ')
+                    m = re.match(r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
+                    if m:
+                        t, p = m.group(1).strip(), '$ ' + m.group(2).strip()
+                    else:
+                        m2 = re.match(r'^(.*?),\s*COP\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
+                        if m2:
+                            t, p = m2.group(1).strip(), 'COP ' + m2.group(2).strip()
+                        else:
+                            continue
+                    if t:
+                        seen[lid] = {'title': t, 'price': p}
+                except Exception:
+                    continue
+
         for i in range(max_scrolls):
+            _collect_visible()
+            prev_total = len(seen)
+            # Scroll hacia abajo
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
             # Cada 3 scrolls, subir un poco y volver a bajar (trigger lazy load)
@@ -75,67 +110,22 @@ class FacebookMarketplaceScraper:
                 time.sleep(0.5)
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1.5)
-            # Contar productos actuales en el DOM
-            cur_count = len(self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]'))
-            if cur_count > prev_count:
+            _collect_visible()
+            new_total = len(seen)
+            if new_total > prev_total:
                 stale_attempts = 0
-                prev_count = cur_count
-                print(f"DEBUG scroll {i+1}: {cur_count} productos detectados")
+                print(f"DEBUG scroll {i+1}: {new_total} productos acumulados (+{new_total - prev_total})")
             else:
                 stale_attempts += 1
                 if stale_attempts >= max_stale:
-                    print(f"DEBUG scroll {i+1}: Sin nuevos productos tras {max_stale} intentos. Total: {cur_count}")
+                    print(f"DEBUG scroll {i+1}: Sin nuevos productos tras {max_stale} scrolls. Total: {new_total}")
                     break
-        print(f"DEBUG: Scroll finalizado. Productos en DOM: {prev_count}")
-        # Guardar screenshot y HTML para depuración después del scroll
+        print(f"DEBUG: Scroll finalizado. Total productos recolectados: {len(seen)}")
+        # Guardar screenshot y HTML para depuración
         self.driver.save_screenshot('debug_fb.png')
         with open('debug_fb.html', 'w', encoding='utf-8') as f:
             f.write(self.driver.page_source)
-        products = []
-        # Los productos en Facebook Marketplace son <a> con href="/marketplace/item/ID"
-        items = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/marketplace/item/")]')
-        print(f"DEBUG: Se detectaron {len(items)} links de productos tras el scroll.")
-        seen = set()
-        for item in items:
-            try:
-                label = item.get_attribute('aria-label')
-                href = item.get_attribute('href') or ''
-                if not label:
-                    continue
-                # Extraer listing ID del href para deduplicar
-                listing_match = re.search(r'/marketplace/item/(\d+)', href)
-                if not listing_match:
-                    continue
-                listing_id = listing_match.group(1)
-                if listing_id in seen:
-                    continue
-                seen.add(listing_id)
-                # Parsear aria-label: "Nombre, $ Precio, Ciudad, listing ID"
-                label_clean = label.replace('\xa0', ' ')
-                match = re.match(
-                    r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$',
-                    label_clean
-                )
-                if match:
-                    title = match.group(1).strip()
-                    price = '$ ' + match.group(2).strip()
-                    location = match.group(3).strip()
-                else:
-                    # Fallback: COP u otro formato
-                    match2 = re.match(
-                        r'^(.*?),\s*COP\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$',
-                        label_clean
-                    )
-                    if match2:
-                        title = match2.group(1).strip()
-                        price = 'COP ' + match2.group(2).strip()
-                        location = match2.group(3).strip()
-                    else:
-                        continue
-                if title:
-                    products.append({'title': title, 'price': price})
-            except Exception:
-                continue
+        products = list(seen.values())
         return products
 
     def close(self):
