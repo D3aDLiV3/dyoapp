@@ -11,6 +11,7 @@ from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 COOKIES_FILE = "cookies.json"
@@ -27,7 +28,7 @@ log = logging.getLogger('fb_scraper')
 
 class FacebookMarketplaceScraper:
     def __init__(self, headless=True, driver_path=None):
-        runtime_root = Path(__file__).parent / ".selenium-tmp"
+        runtime_root = Path(__file__).resolve().parent / ".selenium-tmp"
         runtime_root.mkdir(exist_ok=True)
 
         # Limpieza best-effort de perfiles temporales viejos que hayan quedado.
@@ -38,8 +39,19 @@ class FacebookMarketplaceScraper:
                 pass
 
         self._profile_dir = Path(tempfile.mkdtemp(prefix="chrome-profile-", dir=str(runtime_root)))
+
+        # Pre-crear la subcarpeta "Default" que Chrome necesita
+        (self._profile_dir / "Default").mkdir(exist_ok=True)
+
+        # Redirigir TODAS las variables de entorno que Chrome/chromedriver puedan usar
+        env_override = os.environ.copy()
         for env_name in ("TMPDIR", "TMP", "TEMP"):
+            env_override[env_name] = str(runtime_root)
             os.environ[env_name] = str(runtime_root)
+        env_override["HOME"] = str(runtime_root)
+        env_override["XDG_CONFIG_HOME"] = str(runtime_root / "xdg-config")
+        env_override["XDG_CACHE_HOME"] = str(runtime_root / "xdg-cache")
+        env_override["XDG_DATA_HOME"] = str(runtime_root / "xdg-data")
         os.environ["HOME"] = str(runtime_root)
         tempfile.tempdir = str(runtime_root)
 
@@ -52,7 +64,9 @@ class FacebookMarketplaceScraper:
         chrome_options.add_argument('--window-size=1920,1080')
         chrome_options.add_argument(f'--user-data-dir={self._profile_dir}')
         chrome_options.add_argument(f'--disk-cache-dir={self._profile_dir / "cache"}')
-        chrome_options.add_argument(f'--data-path={self._profile_dir / "data"}')
+        chrome_options.add_argument('--no-first-run')
+        chrome_options.add_argument('--disable-crash-reporter')
+        chrome_options.add_argument('--disable-background-networking')
         chrome_options.add_argument(f'user-agent={USER_AGENT}')
         chromium_path = shutil.which('chromium-browser') or shutil.which('chromium')
         chrome_path = shutil.which('google-chrome')
@@ -60,7 +74,20 @@ class FacebookMarketplaceScraper:
             chrome_options.binary_location = chromium_path
         elif chrome_path:
             chrome_options.binary_location = chrome_path
-        self.driver = webdriver.Chrome(executable_path=driver_path, options=chrome_options) if driver_path else webdriver.Chrome(options=chrome_options)
+
+        # Pasar entorno limpio al proceso de chromedriver
+        service_kwargs = {}
+        if driver_path:
+            service_kwargs['executable_path'] = driver_path
+        try:
+            svc = Service(**service_kwargs, env=env_override)
+            self.driver = webdriver.Chrome(service=svc, options=chrome_options)
+        except TypeError:
+            # Fallback: versiones viejas de Selenium sin env en Service
+            if driver_path:
+                self.driver = webdriver.Chrome(executable_path=driver_path, options=chrome_options)
+            else:
+                self.driver = webdriver.Chrome(options=chrome_options)
         self._load_cookies(COOKIES_FILE)
 
     def _load_cookies(self, cookies_path):
