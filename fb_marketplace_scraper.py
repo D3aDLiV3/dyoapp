@@ -3,8 +3,11 @@
 import time
 import json
 import re
+import os
 import shutil
 import logging
+import tempfile
+from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -24,13 +27,32 @@ log = logging.getLogger('fb_scraper')
 
 class FacebookMarketplaceScraper:
     def __init__(self, headless=True, driver_path=None):
+        runtime_root = Path(__file__).parent / ".selenium-tmp"
+        runtime_root.mkdir(exist_ok=True)
+
+        # Limpieza best-effort de perfiles temporales viejos que hayan quedado.
+        for old_dir in runtime_root.glob("chrome-profile-*"):
+            try:
+                shutil.rmtree(old_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+        self._profile_dir = Path(tempfile.mkdtemp(prefix="chrome-profile-", dir=str(runtime_root)))
+        for env_name in ("TMPDIR", "TMP", "TEMP"):
+            os.environ[env_name] = str(runtime_root)
+        tempfile.tempdir = str(runtime_root)
+
         chrome_options = Options()
         if headless:
-            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument(f'--user-data-dir={self._profile_dir}')
+        chrome_options.add_argument(f'--disk-cache-dir={self._profile_dir / "cache"}')
+        chrome_options.add_argument('--data-path=/tmp/chrome-data')
+        chrome_options.add_argument('--remote-debugging-port=9222')
         chrome_options.add_argument(f'user-agent={USER_AGENT}')
         chromium_path = shutil.which('chromium-browser') or shutil.which('chromium')
         chrome_path = shutil.which('google-chrome')
@@ -258,7 +280,14 @@ class FacebookMarketplaceScraper:
         return products, debug
 
     def close(self):
-        self.driver.quit()
+        try:
+            self.driver.quit()
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(self._profile_dir, ignore_errors=True)
+        except Exception:
+            pass
 
     if __name__ == "__main__":
         # Configuración principal para scraping robusto

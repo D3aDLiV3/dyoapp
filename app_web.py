@@ -569,14 +569,17 @@ def pagina_auditoria_rrss():
 
     if ejecutar:
         with st.spinner("Ejecutando scraping de Facebook Marketplace..."):
+            scraper = None
             try:
                 from fb_marketplace_scraper import FacebookMarketplaceScraper
                 scraper = FacebookMarketplaceScraper(headless=modo_headless)
                 fb_products, debug_lines = scraper.scrape_products()
-                scraper.close()
             except Exception as e:
                 st.error(f"Error al scrapear Facebook: {e}")
                 return
+            finally:
+                if scraper is not None:
+                    scraper.close()
 
         st.success(f"Productos extraídos de Facebook: {len(fb_products)}")
 
