@@ -6,14 +6,17 @@ SNAPSHOT_PATH = Path(__file__).parent / "auditoria_rrss_snapshots.json"
 
 # Guardar un snapshot de la verificación actual
 
-def guardar_snapshot(resultados):
+def guardar_snapshot(resultados, fb_products=None):
     """Guarda el snapshot de la verificación con timestamp."""
     snapshots = cargar_snapshots()
     now = datetime.now().isoformat(timespec="seconds")
-    snapshots.append({
+    entry = {
         "fecha": now,
         "data": resultados
-    })
+    }
+    if fb_products is not None:
+        entry["fb_products"] = fb_products
+    snapshots.append(entry)
     # Mantener solo los últimos 10 snapshots para no crecer indefinidamente
     if len(snapshots) > 10:
         snapshots = snapshots[-10:]

@@ -587,8 +587,8 @@ def pagina_auditoria_rrss():
         woo_products = _cargar_woo_cache()
         stock_local = db.stock_local_por_producto()
         resultados = fb_vs_woo.comparar_facebook_vs_woo(fb_products, woo_products, stock_local)
-        # Guardar snapshot de la verificación
-        auditsnap.guardar_snapshot(resultados)
+        # Guardar snapshot con resultados Y lista de productos FB
+        auditsnap.guardar_snapshot(resultados, fb_products=fb_products)
 
     # Tabs: Comparativa, Logs, Cambios
 
@@ -620,9 +620,8 @@ def pagina_auditoria_rrss():
                 st.markdown("---")
             # Tablas comparativas
             col1, col2 = st.columns(2)
-            productos_woo_discrepancia, productos_fb_no_en_woo = discrepancias_woo_vs_fb(ult['data'], ult['data'])
-            # NOTA: Para una comparación real, deberías pasar los productos de Woo y los de FB por separado.
-            # Aquí, por simplicidad, se asume que ult['data'] contiene ambos, pero puedes ajustar según tu estructura.
+            fb_snap = ult.get('fb_products', [])
+            productos_woo_discrepancia, productos_fb_no_en_woo = discrepancias_woo_vs_fb(ult['data'], fb_snap)
             with col1:
                 st.markdown("#### Productos WooCommerce con discrepancias")
                 if productos_woo_discrepancia:

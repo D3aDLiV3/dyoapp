@@ -95,11 +95,33 @@ class FacebookMarketplaceScraper:
         stale_attempts = 0
         max_stale = 10
 
-        # JS que recolecta productos directamente en el navegador (sin WebElement refs)
+        # JS que recolecta SOLO productos del perfil, excluyendo "Sugerencias de hoy"
         collect_js = """
         var result = [];
+        // Encontrar la sección "Sugerencias de hoy" para excluirla
+        var sugContainers = [];
+        var spans = document.querySelectorAll('span');
+        for (var i = 0; i < spans.length; i++) {
+            var txt = spans[i].textContent.trim();
+            if (txt === 'Sugerencias de hoy' || txt === "Today's picks") {
+                var container = spans[i];
+                while (container.parentElement && container.parentElement !== document.body) {
+                    container = container.parentElement;
+                    if (container.querySelectorAll('a[href*="/marketplace/item/"]').length >= 3) {
+                        sugContainers.push(container);
+                        break;
+                    }
+                }
+            }
+        }
         var items = document.querySelectorAll('a[href*="/marketplace/item/"]');
         items.forEach(function(a) {
+            // Excluir si está dentro de un contenedor de Sugerencias
+            var dominated = false;
+            for (var j = 0; j < sugContainers.length; j++) {
+                if (sugContainers[j].contains(a)) { dominated = true; break; }
+            }
+            if (dominated) return;
             var href = a.getAttribute('href') || '';
             var label = a.getAttribute('aria-label') || '';
             if (href && label) {
