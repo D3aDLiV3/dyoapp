@@ -203,7 +203,7 @@ class FacebookMarketplaceScraper:
             docItems: countIn(document),
             dialogItems: countIn(dialog),
             mainItems: countIn(main),
-            hasLoginWord: /log in|iniciar sesi[oó]n|entra|login/i.test(txt),
+            hasLoginWord: /\blog.?in\b|iniciar sesi[oó]n|\bentrar\b|\blogin\b/i.test(txt),
             hasMarketplaceWord: /marketplace|publicaciones|disponibles y en stock|ordenar por/i.test(txt),
             textSample: txt.slice(0, 600)
         };
@@ -224,10 +224,15 @@ class FacebookMarketplaceScraper:
         log.info(f"Navegando a {PROFILE_URL} -> {current_url} | {page_title}")
 
         # Detección de login/bloqueo
-        if (
+        has_marketplace = (
+            diag.get('docItems', 0) > 0 or
+            diag.get('dialogItems', 0) > 0 or
+            diag.get('mainItems', 0) > 0 or
+            diag.get('hasMarketplaceWord')
+        )
+        if not has_marketplace and (
             'login' in current_url or
             'Log in to Facebook' in page_title or
-            self.driver.find_elements(By.NAME, 'login') or
             diag.get('hasLoginWord')
         ):
             msg = "ALERTA: Facebook pide login. Cookies caducadas."
