@@ -16,15 +16,20 @@ from selenium.webdriver.chrome.service import Service
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 COOKIES_FILE = "cookies.json"
 PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"
+ENABLE_FILE_LOGS = os.environ.get("FB_SCRAPER_FILE_LOGS", "0") == "1"
+SAVE_DEBUG_ARTIFACTS = os.environ.get("FB_SCRAPER_SAVE_ARTIFACTS", "0") == "1"
 
-# Log a archivo para poder revisar en el servidor
-logging.basicConfig(
-    filename='fb_scraper_debug.log',
-    level=logging.DEBUG,
-    format='%(asctime)s %(levelname)s %(message)s',
-    force=True
-)
 log = logging.getLogger('fb_scraper')
+if not log.handlers:
+    if ENABLE_FILE_LOGS:
+        _fh = logging.FileHandler('fb_scraper_debug.log', encoding='utf-8')
+        _fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        log.addHandler(_fh)
+        log.setLevel(logging.DEBUG)
+    else:
+        log.addHandler(logging.NullHandler())
+        log.setLevel(logging.WARNING)
+log.propagate = False
 
 class FacebookMarketplaceScraper:
     def __init__(self, headless=True, driver_path=None):
@@ -228,7 +233,8 @@ class FacebookMarketplaceScraper:
             msg = "ALERTA: Facebook pide login. Cookies caducadas."
             debug.append(msg)
             log.error(msg)
-            self.driver.save_screenshot('error.png')
+            if SAVE_DEBUG_ARTIFACTS:
+                self.driver.save_screenshot('error.png')
             return [], debug
 
         debug.append(
@@ -551,16 +557,17 @@ class FacebookMarketplaceScraper:
             )
             log.warning(f"Scraping terminó en 0 productos. Diag={final_diag}")
 
-        # Screenshot y HTML
-        self.driver.save_screenshot('debug_fb.png')
-        with open('debug_fb.html', 'w', encoding='utf-8') as f:
-            f.write(self.driver.page_source)
-
-        # Guardar lista de productos a archivo para inspección
-        with open('debug_productos_fb.txt', 'w', encoding='utf-8') as f:
-            for lid, prod in seen.items():
-                f.write(f"[{lid}] {prod['title']} | {prod['price']}\n")
-        debug.append(f"Archivos debug: debug_fb.png, debug_fb.html, debug_productos_fb.txt, fb_scraper_debug.log")
+        if SAVE_DEBUG_ARTIFACTS:
+            self.driver.save_screenshot('debug_fb.png')
+            with open('debug_fb.html', 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+            with open('debug_productos_fb.txt', 'w', encoding='utf-8') as f:
+                for lid, prod in seen.items():
+                    f.write(f"[{lid}] {prod['title']} | {prod['price']}\n")
+            if ENABLE_FILE_LOGS:
+                debug.append("Archivos debug: debug_fb.png, debug_fb.html, debug_productos_fb.txt, fb_scraper_debug.log")
+            else:
+                debug.append("Archivos debug: debug_fb.png, debug_fb.html, debug_productos_fb.txt")
 
         products = list(seen.values())
         return products, debug
