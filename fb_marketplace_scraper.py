@@ -358,10 +358,11 @@ class FacebookMarketplaceScraper:
         function findScroller(root, items) {
             var candidate = null;
             var maxScrollRoom = -1;
-            var nodes = [root].concat(Array.from(root.querySelectorAll('div, section, main')));
+            var bodyRoot = (root === document) ? document.body : root;
+            var nodes = [bodyRoot].concat(Array.from(bodyRoot.querySelectorAll('div, section, main')));
             nodes.forEach(function(el) {
-                if (!el || !el.querySelector) return;
-                if (items.length && !el.contains(items[0]) && el !== root) return;
+                if (!el || el.nodeType !== 1) return;
+                if (items.length && !el.contains(items[0]) && el !== bodyRoot) return;
                 var style = window.getComputedStyle(el);
                 var overflowY = style.overflowY;
                 var scrollRoom = el.scrollHeight - el.clientHeight;
@@ -374,7 +375,7 @@ class FacebookMarketplaceScraper:
             });
             if (!candidate && items.length) {
                 var el = items[0].parentElement;
-                while (el && el !== root && el !== document.body && el !== document.documentElement) {
+                while (el && el !== bodyRoot && el !== document.body && el !== document.documentElement) {
                     var scrollRoom = el.scrollHeight - el.clientHeight;
                     if (scrollRoom > 120) {
                         candidate = el;
@@ -388,7 +389,8 @@ class FacebookMarketplaceScraper:
 
         var selected = getRoot();
         var root = selected.el;
-        var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
+        var bodyRoot = (root === document) ? document.body : root;
+        var items = bodyRoot.querySelectorAll('a[href*="/marketplace/item/"]');
         var info = {
             rootName: selected.name,
             rootTag: root === document ? 'document' : root.tagName,
@@ -443,14 +445,16 @@ class FacebookMarketplaceScraper:
             return best.el;
         }
         var root = getRoot();
-        var items = root.querySelectorAll('a[href*="/marketplace/item/"]');
+        var bodyRoot = (root === document) ? document.body : root;
+        var items = bodyRoot.querySelectorAll('a[href*="/marketplace/item/"]');
         if (items.length > 1) {
             var mid = Math.floor(items.length / 2);
             items[mid].scrollIntoView({behavior: 'instant', block: 'center'});
         }
-        var nodes = [root].concat(Array.from(root.querySelectorAll('div, section, main')));
+        var nodes = [bodyRoot].concat(Array.from(bodyRoot.querySelectorAll('div, section, main')));
         for (var i = 0; i < nodes.length; i++) {
             var el = nodes[i];
+            if (el.nodeType !== 1) continue;
             if ((el.scrollHeight - el.clientHeight) > 120) {
                 el.scrollTop = Math.max(0, Math.floor(el.scrollTop * 0.5));
                 break;
