@@ -292,14 +292,18 @@ class FacebookMarketplaceScraper:
         var root = selected.el;
         var result = [];
         var sugContainers = [];
+        var totalItems = root.querySelectorAll('a[href*="/marketplace/item/"]').length;
         var spans = root.querySelectorAll('span');
         for (var i = 0; i < spans.length; i++) {
             var txt = (spans[i].textContent || '').trim();
             if (txt === 'Sugerencias de hoy' || txt === "Today's picks") {
                 var container = spans[i];
-                while (container.parentElement && container.parentElement !== root) {
+                var levels = 0;
+                while (container.parentElement && container.parentElement !== root && levels < 6) {
                     container = container.parentElement;
-                    if (container.querySelectorAll('a[href*="/marketplace/item/"]').length >= 3) {
+                    levels++;
+                    var inContainer = container.querySelectorAll('a[href*="/marketplace/item/"]').length;
+                    if (inContainer >= 3 && inContainer < totalItems) {
                         sugContainers.push(container);
                         break;
                     }
@@ -462,6 +466,19 @@ class FacebookMarketplaceScraper:
         }
         """
 
+        descartes = {'sin_precio': 0, 'sin_titulo': 0, 'href_invalido': 0}
+        _price_full_re = re.compile(
+            r'((?:COP|USD|EUR)\s*[\d][.,\d]*|'
+            r'\$\s*[\d][.,\d]*|'
+            r'[\d][.,\d]*\s*(?:COP|USD|EUR))',
+            re.IGNORECASE
+        )
+
+        def _clean_meta(s):
+            s = re.sub(r',?\s*listing\s+\d+', '', s, flags=re.IGNORECASE)
+            s = re.sub(r',?\s*\b(?:Available|Disponible)\b', '', s, flags=re.IGNORECASE)
+            return s.strip(' ,|-')
+
         def _collect_from_js():
             """Recolecta productos usando JS puro, sin WebElement refs."""
             try:
@@ -480,36 +497,39 @@ class FacebookMarketplaceScraper:
                 raw_text = item.get('rawText', '')
                 lm = re.search(r'/marketplace/item/(\d+)', href)
                 if not lm:
+                    descartes['href_invalido'] += 1
                     continue
                 lid = lm.group(1)
                 if lid in seen:
                     continue
-                lc = (label or '').replace('\xa0', ' ')
-                m = re.match(r'^(.*?),\s*\$\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
-                if m:
-                    t, p = m.group(1).strip(), '$ ' + m.group(2).strip()
+                # Nivel 1: aria-label limpio
+                lc = _clean_meta((label or '').replace('\xa0', ' '))
+                pm = _price_full_re.search(lc)
+                if pm:
+                    p = pm.group(0).strip()
+                    before = lc[:pm.start()].strip(' ,|-')
+                    after_txt = lc[pm.end():].strip(' ,|-')
+                    t = before if before else after_txt
                 else:
-                    m2 = re.match(r'^(.*?),\s*COP\s*([\d.,]+),\s*(.*?),\s*listing\s+\d+$', lc)
-                    if m2:
-                        t, p = m2.group(1).strip(), 'COP ' + m2.group(2).strip()
+                    # Nivel 2: rawText limpio
+                    fb = _clean_meta(raw_text.replace('\xa0', ' '))
+                    pm = _price_full_re.search(fb)
+                    if pm:
+                        p = pm.group(0).strip()
+                        before = fb[:pm.start()].strip(' ,|-')
+                        after_txt = fb[pm.end():].strip(' ,|-')
+                        t = before if before else after_txt
                     else:
-                        # Fallback: extraer precio/título desde el texto visible del link.
-                        fallback = raw_text.replace('\xa0', ' ')
-                        price_match = re.search(r'(COP\s*[\d.,]+|\$\s*[\d.,]+)', fallback)
-                        if not price_match:
-                            log.debug(f"  sin precio visible: label={lc[:120]} raw={fallback[:120]}")
-                            continue
-                        p = price_match.group(1).strip()
-                        t = fallback[:price_match.start()].strip(' ,|-')
-                        if not t:
-                            after = fallback[price_match.end():].strip(' ,|-')
-                            t = after.split(' Barrancabermeja')[0].strip(' ,|-') if after else ''
-                        if not t:
-                            log.debug(f"  fallback sin titulo: label={lc[:120]} raw={fallback[:120]}")
-                            continue
-                if t:
-                    seen[lid] = {'title': t, 'price': p}
-                    log.debug(f"  NUEVO: [{lid}] {t} | {p}")
+                        # Nivel 3: sin precio encontrado
+                        descartes['sin_precio'] += 1
+                        log.debug(f"  sin precio: label={lc[:120]} raw={raw_text[:120]}")
+                        continue
+                if not t:
+                    descartes['sin_titulo'] += 1
+                    log.debug(f"  sin titulo: label={lc[:120]} raw={raw_text[:120]}")
+                    continue
+                seen[lid] = {'title': t, 'price': p}
+                log.debug(f"  NUEVO: [{lid}] {t} | {p}")
 
         for i in range(max_scrolls):
             _collect_from_js()
@@ -549,6 +569,7 @@ class FacebookMarketplaceScraper:
                     break
 
         debug.append(f"TOTAL RECOLECTADOS: {len(seen)}")
+        debug.append(f"Descartes: sin_precio={descartes['sin_precio']} sin_titulo={descartes['sin_titulo']} href_invalido={descartes['href_invalido']}")
         log.info(f"Scroll finalizado. Total={len(seen)}")
 
         if not seen:

@@ -597,6 +597,13 @@ def pagina_auditoria_rrss():
         woo_products = _cargar_woo_cache()
         stock_local = db.stock_local_por_producto()
         resultados = fb_vs_woo.comparar_facebook_vs_woo(fb_products, woo_products, stock_local)
+        total_ok = sum(1 for r in resultados if str(r.get("Estado", "")).startswith("OK"))
+        total_discrepancias = len(resultados) - total_ok
+        st.info(
+            f"Revisados: Woo con stock={len(resultados)} | "
+            f"Extraídos de Facebook={len(fb_products)} | "
+            f"Discrepancias={total_discrepancias}"
+        )
         # Guardar snapshot con resultados Y lista de productos FB
         auditsnap.guardar_snapshot(resultados, fb_products=fb_products)
 
@@ -618,12 +625,18 @@ def pagina_auditoria_rrss():
             cambios, _, _ = auditsnap.comparar_ultimos_snapshots()
             from auditoria_rrss_utils import resumen_cambios, discrepancias_woo_vs_fb
             resumen = resumen_cambios(cambios) if cambios else {'Nuevos': 0, 'Eliminados': 0, 'Modificados': 0}
+            total_woo_revisados = len(ult['data'])
+            total_ok = sum(1 for r in ult['data'] if str(r.get('Estado', '')).startswith('OK'))
             # Caja resumen
             with st.container():
                 st.markdown(f"### Resumen de verificación")
                 st.markdown(f"**Fecha actual:** {fecha_actual}")
                 if fecha_anterior:
                     st.markdown(f"**Fecha anterior:** {fecha_anterior}")
+                st.markdown(f"- **Productos extraídos de Facebook:** {len(ult.get('fb_products', []))}  ")
+                st.markdown(f"- **Productos WooCommerce revisados:** {total_woo_revisados}  ")
+                st.markdown(f"- **Productos WooCommerce OK:** {total_ok}  ")
+                st.markdown(f"- **Productos WooCommerce con discrepancias:** {total_woo_revisados - total_ok}  ")
                 st.markdown(f"- **Nuevos:** {resumen['Nuevos']}  ")
                 st.markdown(f"- **Eliminados:** {resumen['Eliminados']}  ")
                 st.markdown(f"- **Modificados:** {resumen['Modificados']}  ")
