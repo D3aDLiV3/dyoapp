@@ -7,6 +7,7 @@ import os
 import shutil
 import logging
 import tempfile
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -18,11 +19,18 @@ COOKIES_FILE = "cookies.json"
 PROFILE_URL = "https://www.facebook.com/marketplace/profile/61578198642564"
 ENABLE_FILE_LOGS = os.environ.get("FB_SCRAPER_FILE_LOGS", "0") == "1"
 SAVE_DEBUG_ARTIFACTS = os.environ.get("FB_SCRAPER_SAVE_ARTIFACTS", "0") == "1"
+FILE_LOG_MAX_BYTES = int(os.environ.get("FB_SCRAPER_FILE_LOG_MAX_BYTES", str(2 * 1024 * 1024)))
+FILE_LOG_BACKUP_COUNT = int(os.environ.get("FB_SCRAPER_FILE_LOG_BACKUP_COUNT", "2"))
 
 log = logging.getLogger('fb_scraper')
 if not log.handlers:
     if ENABLE_FILE_LOGS:
-        _fh = logging.FileHandler('fb_scraper_debug.log', encoding='utf-8')
+        _fh = RotatingFileHandler(
+            'fb_scraper_debug.log',
+            maxBytes=FILE_LOG_MAX_BYTES,
+            backupCount=FILE_LOG_BACKUP_COUNT,
+            encoding='utf-8'
+        )
         _fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
         log.addHandler(_fh)
         log.setLevel(logging.DEBUG)

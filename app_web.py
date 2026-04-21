@@ -11,6 +11,7 @@ import secrets
 import tempfile
 import time as _time
 import warnings
+from logging.handlers import RotatingFileHandler
 from io import BytesIO
 from pathlib import Path
 from datetime import date as dt_date, datetime
@@ -22,9 +23,16 @@ import streamlit as st
 
 # ── Logger de sesiones ──────────────────────────────────────────────────────────
 _LOG_PATH = Path(__file__).parent / "sessions.log"
+_LOG_MAX_BYTES = int(os.environ.get("SESSION_LOG_MAX_BYTES", str(1 * 1024 * 1024)))
+_LOG_BACKUP_COUNT = int(os.environ.get("SESSION_LOG_BACKUP_COUNT", "5"))
 _slog = logging.getLogger("dyo_sessions")
 if not _slog.handlers:
-    _sh = logging.FileHandler(str(_LOG_PATH), encoding="utf-8")
+    _sh = RotatingFileHandler(
+        str(_LOG_PATH),
+        maxBytes=_LOG_MAX_BYTES,
+        backupCount=_LOG_BACKUP_COUNT,
+        encoding="utf-8"
+    )
     _sh.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     _slog.addHandler(_sh)
     _slog.setLevel(logging.INFO)
