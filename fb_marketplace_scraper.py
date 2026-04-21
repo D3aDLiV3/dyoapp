@@ -351,30 +351,49 @@ class FacebookMarketplaceScraper:
             return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
         }
         function getRoot() {
-            var candidates = [
-                {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')},
-                {name: 'main', el: document.querySelector('[role="main"]')},
-                {name: 'document', el: document}
-            ];
-            var best = candidates[2];
-            var bestCount = -1;
-            candidates.forEach(function(c) {
-                var count = countItems(c.el);
-                if (count > bestCount) {
-                    best = c;
-                    bestCount = count;
-                }
-            });
-            return best;
+            var dialog = {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')};
+            var main = {name: 'main', el: document.querySelector('[role="main"]')};
+            var doc = {name: 'document', el: document};
+            if (countItems(dialog.el) >= 6) return dialog;
+            if (countItems(main.el) >= 6) return main;
+            if (countItems(dialog.el) > 0) return dialog;
+            if (countItems(main.el) > 0) return main;
+            return doc;
         }
-        function findScroller(root, items) {
+        function hasLoading(root) {
+            var scope = (root === document) ? document.body : root;
+            if (!scope) return false;
+            var selectors = [
+                '[role="progressbar"]',
+                '[aria-busy="true"]',
+                '[data-visualcompletion="loading-state"]',
+                '[data-visualcompletion="loading"]',
+                '.x1n2onr6',
+                '.x1ja2u2z'
+            ];
+            for (var i = 0; i < selectors.length; i++) {
+                if (scope.querySelector(selectors[i])) return true;
+            }
+            var text = (scope.innerText || '').slice(-800).trim();
+            return /cargando|loading|cargando m[aá]s/i.test(text);
+        }
+        function findScroller(root, lastItem) {
             var candidate = null;
             var maxScrollRoom = -1;
             var bodyRoot = (root === document) ? document.body : root;
+            var anchor = lastItem;
+            while (anchor && anchor !== bodyRoot && anchor !== document.body && anchor !== document.documentElement) {
+                var anchorRoom = anchor.scrollHeight - anchor.clientHeight;
+                var anchorStyle = window.getComputedStyle(anchor);
+                if ((anchorStyle.overflowY === 'auto' || anchorStyle.overflowY === 'scroll' || anchorStyle.overflowY === 'overlay') && anchorRoom > 120) {
+                    return anchor;
+                }
+                anchor = anchor.parentElement;
+            }
             var nodes = [bodyRoot].concat(Array.from(bodyRoot.querySelectorAll('div, section, main')));
             nodes.forEach(function(el) {
                 if (!el || el.nodeType !== 1) return;
-                if (items.length && !el.contains(items[0]) && el !== bodyRoot) return;
+                if (lastItem && !el.contains(lastItem) && el !== bodyRoot) return;
                 var style = window.getComputedStyle(el);
                 var overflowY = style.overflowY;
                 var scrollRoom = el.scrollHeight - el.clientHeight;
@@ -385,8 +404,8 @@ class FacebookMarketplaceScraper:
                     }
                 }
             });
-            if (!candidate && items.length) {
-                var el = items[0].parentElement;
+            if (!candidate && lastItem) {
+                var el = lastItem.parentElement;
                 while (el && el !== bodyRoot && el !== document.body && el !== document.documentElement) {
                     var scrollRoom = el.scrollHeight - el.clientHeight;
                     if (scrollRoom > 120) {
@@ -408,23 +427,31 @@ class FacebookMarketplaceScraper:
             rootTag: root === document ? 'document' : root.tagName,
             itemCount: items.length
         };
+        var lastItem = items.length ? items[items.length - 1] : null;
+        info.lastHref = lastItem ? (lastItem.getAttribute('href') || '') : '';
 
-        if (items.length > 0) {
-            items[items.length - 1].scrollIntoView({behavior: 'instant', block: 'end'});
+        if (lastItem) {
+            lastItem.scrollIntoView({behavior: 'instant', block: 'end'});
         }
 
-        var scroller = findScroller(root, items);
+        var scroller = findScroller(root, lastItem);
         if (scroller) {
             var before = scroller.scrollTop;
+            var maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
             var step = Math.max(700, Math.floor(scroller.clientHeight * 0.9));
-            scroller.scrollTop = Math.min(scroller.scrollTop + step, scroller.scrollHeight);
-            info.scroller = 'tag=' + scroller.tagName + ' before=' + before + ' after=' + scroller.scrollTop + ' step=' + step + ' scrollH=' + scroller.scrollHeight + ' clientH=' + scroller.clientHeight;
+            scroller.scrollTop = Math.min(scroller.scrollTop + step, maxTop);
+            if (scroller.scrollTop === before && lastItem) {
+                lastItem.scrollIntoView({behavior: 'instant', block: 'center'});
+                scroller.scrollTop = Math.min(scroller.scrollTop + Math.max(320, Math.floor(step * 0.45)), maxTop);
+            }
+            info.scroller = 'tag=' + scroller.tagName + ' before=' + before + ' after=' + scroller.scrollTop + ' step=' + step + ' maxTop=' + maxTop + ' scrollH=' + scroller.scrollHeight + ' clientH=' + scroller.clientHeight;
         } else {
             var se = document.scrollingElement || document.documentElement;
             var before = se.scrollTop;
             se.scrollTop = se.scrollTop + Math.max(700, Math.floor(window.innerHeight * 0.9));
             info.scroller = 'fallback before=' + before + ' after=' + se.scrollTop + ' scrollH=' + se.scrollHeight + ' clientH=' + se.clientHeight;
         }
+        info.loading = hasLoading(root);
 
         var thumb = root.querySelector('[data-thumb="1"]');
         if (thumb) {
@@ -440,21 +467,13 @@ class FacebookMarketplaceScraper:
             return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
         }
         function getRoot() {
-            var candidates = [
-                {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')},
-                {name: 'main', el: document.querySelector('[role="main"]')},
-                {name: 'document', el: document}
-            ];
-            var best = candidates[2];
-            var bestCount = -1;
-            candidates.forEach(function(c) {
-                var count = countItems(c.el);
-                if (count > bestCount) {
-                    best = c;
-                    bestCount = count;
-                }
-            });
-            return best.el;
+            var dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
+            var main = document.querySelector('[role="main"]');
+            if (countItems(dialog) >= 6) return dialog;
+            if (countItems(main) >= 6) return main;
+            if (countItems(dialog) > 0) return dialog;
+            if (countItems(main) > 0) return main;
+            return document;
         }
         var root = getRoot();
         var bodyRoot = (root === document) ? document.body : root;
@@ -472,6 +491,51 @@ class FacebookMarketplaceScraper:
                 break;
             }
         }
+        """
+
+        feed_state_js = """
+        function countItems(root) {
+            if (!root || !root.querySelectorAll) return 0;
+            return root.querySelectorAll('a[href*="/marketplace/item/"]').length;
+        }
+        function getRoot() {
+            var dialog = {name: 'dialog', el: document.querySelector('[role="dialog"][aria-modal="true"]')};
+            var main = {name: 'main', el: document.querySelector('[role="main"]')};
+            var doc = {name: 'document', el: document};
+            if (countItems(dialog.el) >= 6) return dialog;
+            if (countItems(main.el) >= 6) return main;
+            if (countItems(dialog.el) > 0) return dialog;
+            if (countItems(main.el) > 0) return main;
+            return doc;
+        }
+        function hasLoading(root) {
+            var scope = (root === document) ? document.body : root;
+            if (!scope) return false;
+            var selectors = [
+                '[role="progressbar"]',
+                '[aria-busy="true"]',
+                '[data-visualcompletion="loading-state"]',
+                '[data-visualcompletion="loading"]',
+                '.x1n2onr6',
+                '.x1ja2u2z'
+            ];
+            for (var i = 0; i < selectors.length; i++) {
+                if (scope.querySelector(selectors[i])) return true;
+            }
+            var text = (scope.innerText || '').slice(-800).trim();
+            return /cargando|loading|cargando m[aá]s/i.test(text);
+        }
+        var selected = getRoot();
+        var root = selected.el;
+        var bodyRoot = (root === document) ? document.body : root;
+        var items = bodyRoot.querySelectorAll('a[href*="/marketplace/item/"]');
+        var lastItem = items.length ? items[items.length - 1] : null;
+        return {
+            rootName: selected.name,
+            itemCount: items.length,
+            lastHref: lastItem ? (lastItem.getAttribute('href') || '') : '',
+            loading: hasLoading(root)
+        };
         """
 
         descartes = {'sin_precio': 0, 'sin_titulo': 0, 'href_invalido': 0}
@@ -539,16 +603,40 @@ class FacebookMarketplaceScraper:
                 seen[lid] = {'title': t, 'price': p}
                 log.debug(f"  NUEVO: [{lid}] {t} | {p}")
 
+        def _get_feed_state():
+            try:
+                return self.driver.execute_script(feed_state_js) or {}
+            except Exception as ex:
+                log.debug(f"  Error en feed_state_js: {ex}")
+                return {}
+
+        def _wait_until_feed_settles(prev_dom_items, prev_last_href):
+            state = {}
+            for _ in range(8):
+                state = _get_feed_state()
+                dom_items = state.get('itemCount', 0)
+                last_href = state.get('lastHref', '')
+                loading = bool(state.get('loading'))
+                if not loading and (dom_items > prev_dom_items or last_href != prev_last_href):
+                    return state
+                if not loading and dom_items == prev_dom_items and last_href == prev_last_href:
+                    return state
+                time.sleep(1)
+            return state
+
         for i in range(max_scrolls):
             _collect_from_js()
             prev_total = len(seen)
+            before_state = _get_feed_state()
+            prev_dom_items = before_state.get('itemCount', 0)
+            prev_last_href = before_state.get('lastHref', '')
 
             # Scroll agresivo: todas las estrategias de una vez
             try:
                 sc_info = self.driver.execute_script(scroll_all_js)
             except Exception as ex:
                 sc_info = f"error: {ex}"
-            time.sleep(2)
+            after_state = _wait_until_feed_settles(prev_dom_items, prev_last_href)
 
             # Cada 4 scrolls: bounce (subir a mitad, esperar, volver a bajar)
             if i % 4 == 3:
@@ -558,15 +646,26 @@ class FacebookMarketplaceScraper:
                     self.driver.execute_script(scroll_all_js)
                 except Exception:
                     pass
-                time.sleep(1.5)
+                after_state = _wait_until_feed_settles(
+                    after_state.get('itemCount', prev_dom_items),
+                    after_state.get('lastHref', prev_last_href)
+                )
 
             _collect_from_js()
             new_total = len(seen)
+            dom_after = after_state.get('itemCount', 0)
+            last_after = after_state.get('lastHref', '')
+            loading_after = bool(after_state.get('loading'))
 
-            line = f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) | {sc_info}"
+            line = (
+                f"Scroll {i+1}: acumulados={new_total} (+{new_total-prev_total}) "
+                f"| dom={prev_dom_items}->{dom_after} "
+                f"| lastChanged={last_after != prev_last_href} "
+                f"| loading={loading_after} | {sc_info}"
+            )
             log.info(line)
 
-            if new_total > prev_total:
+            if new_total > prev_total or dom_after > prev_dom_items or last_after != prev_last_href:
                 stale_attempts = 0
                 debug.append(line)
             else:
