@@ -847,6 +847,10 @@ def pagina_inicio():
 #  MÓDULO: ORDEN DE COMPRA
 # ═════════════════════════════════════════════════════════════════════════════
 def _oc_tab_nueva():
+    # Consume pending reset BEFORE any widget with those keys is instantiated
+    if st.session_state.pop("_oc_reset_costos", False):
+        st.session_state.pop("oc_costos_adicionales", None)
+        st.session_state.pop("oc_desc_costos_adicionales", None)
 
     c1, c2 = st.columns([1, 2])
     with c1:
@@ -1068,8 +1072,7 @@ def _oc_tab_nueva():
                                               item["cantidad"])
                 n = len(st.session_state.oc_items)
                 st.session_state.oc_items.clear()
-                st.session_state.oc_costos_adicionales     = 0.0
-                st.session_state.oc_desc_costos_adicionales = ""
+                st.session_state["_oc_reset_costos"] = True
                 _limpiar_borrador_oc(st.session_state.usuario_actual)
                 st.session_state.oc_producto_actual = None
                 st.session_state["oc_guardando"] = False
@@ -1088,8 +1091,7 @@ def _oc_tab_nueva():
         with bc:
             if st.button("🗑️ Limpiar lista", key="btn_oc_limpiar"):
                 st.session_state.oc_items.clear()
-                st.session_state.oc_costos_adicionales      = 0.0
-                st.session_state.oc_desc_costos_adicionales = ""
+                st.session_state["_oc_reset_costos"] = True
                 _limpiar_borrador_oc(st.session_state.usuario_actual)
                 st.session_state.oc_producto_actual = None
                 st.rerun()
